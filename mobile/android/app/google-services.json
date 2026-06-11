@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "97750918188",
+    "project_id": "familly-guard",
+    "storage_bucket": "familly-guard.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:97750918188:android:278f41260175a0c2955d89",
+        "android_client_info": {
+          "package_name": "com.example.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDtNM_D8BgM5whOEyWOjKk0QOMBaRxssE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

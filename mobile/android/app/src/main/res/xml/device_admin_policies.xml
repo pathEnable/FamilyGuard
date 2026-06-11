@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+        <!-- You can add other policies here if needed, but force-lock is the most common for basic protection and preventing uninstallation without admin removal -->
+    </uses-policies>
+</device-admin>
