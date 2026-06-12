@@ -39,7 +39,8 @@ class WebSocketService {
       // Constuire l'URL WebSocket à partir de l'URL de base API
       final uri = Uri.parse(ApiService.baseUrl);
       final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
-      _wsUrl = '$wsScheme://${uri.host}:${uri.port}/api/ws/$parentId?token=$token';
+      final portString = (uri.hasPort && uri.port != 80 && uri.port != 443) ? ':${uri.port}' : '';
+      _wsUrl = '$wsScheme://${uri.host}$portString/api/ws/$parentId?token=$token';
 
       debugPrint('WS: Connexion à $_wsUrl');
       _channel = WebSocketChannel.connect(Uri.parse(_wsUrl!));

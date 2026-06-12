@@ -16,7 +16,9 @@ export function useWebSocket() {
 
       if (!parentId) return;
 
-      const wsUrl = `ws://127.0.0.1:8000/api/v1/ws/${parentId}?token=${token}`;
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+      const wsUrlBase = apiUrl.replace(/^http/, 'ws');
+      const wsUrl = `${wsUrlBase}/ws/${parentId}?token=${token}`;
       ws.current = new WebSocket(wsUrl);
 
       ws.current.onopen = () => {

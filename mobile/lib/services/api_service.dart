@@ -8,15 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   static String get baseUrl {
-    if (kIsWeb) {
-      return 'http://localhost:8000/api/v1';
-    } else if (Platform.isAndroid) {
-      // 10.0.2.2 is the alias to host loopback interface in Android emulator
-      return 'http://10.0.2.2:8000/api/v1';
-    } else {
-      // iOS, Windows, macOS, Linux
-      return 'http://localhost:8000/api/v1';
-    }
+    return 'https://familyguard-znbt.onrender.com/api/v1';
   }
 
   static Future<String?> getToken() async {
