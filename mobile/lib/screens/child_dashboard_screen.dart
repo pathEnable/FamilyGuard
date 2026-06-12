@@ -81,9 +81,7 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
     _loadTimeStatus();
     _loadBloomFilter();
     _checkPin();
-    _checkDeviceAdmin();
-    LocationService.initialize();
-    HarassmentDetectorService.initialize();
+    _initializePermissionsSequentially();
     
     // Connect to WebSocket and listen for events
     WebSocketService.instance.connect();
@@ -233,12 +231,16 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
     } catch (_) {}
   }
 
+  Future<void> _initializePermissionsSequentially() async {
+    await _checkDeviceAdmin();
+    await LocationService.initialize();
+    await HarassmentDetectorService.initialize();
+  }
+
   Future<void> _checkDeviceAdmin() async {
     final isEnabled = await DeviceAdminService.isDeviceAdminEnabled();
     if (!isEnabled && mounted) {
-      // Afficher un dialogue forçant l'activation pour que l'enfant ne puisse pas
-      // simplement ignorer l'étape
-      showDialog(
+      await showDialog(
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
@@ -252,7 +254,6 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
                 await DeviceAdminService.requestDeviceAdmin();
                 if (ctx.mounted) {
                   Navigator.of(ctx).pop();
-                  _checkDeviceAdmin(); // Re-check after returning
                 }
               },
               child: const Text("Activer"),
@@ -260,6 +261,11 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
           ],
         ),
       );
+      // Wait a moment and check again
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!await DeviceAdminService.isDeviceAdminEnabled()) {
+        await _checkDeviceAdmin();
+      }
     }
   }
 

@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -57,6 +58,7 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="dataSync"
+            tools:replace="android:exported"
             android:exported="false" />
 
         <!-- Device Administrator Receiver to prevent uninstallation -->
@@ -81,6 +83,7 @@
         <!-- Auto-restart on device boot -->
         <receiver
             android:name="id.flutter.flutter_background_service.BootReceiver"
+            tools:replace="android:exported"
             android:exported="false"
             android:enabled="true">
             <intent-filter>

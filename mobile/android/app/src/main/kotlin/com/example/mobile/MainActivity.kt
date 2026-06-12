@@ -149,6 +149,11 @@ class MainActivity : FlutterActivity() {
                         result.success(true) // Already active
                     }
                 }
+                "requestNotificationListenerPermission" -> {
+                    val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                    startActivity(intent)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

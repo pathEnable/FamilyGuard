@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:notification_listener_service/notification_listener_service.dart';
 import 'package:notification_listener_service/notification_event.dart';
@@ -20,8 +21,16 @@ class HarassmentDetectorService {
       
       bool isGranted = await NotificationListenerService.isPermissionGranted();
       if (!isGranted) {
-        debugPrint("Requesting Notification Listener Permission");
-        isGranted = await NotificationListenerService.requestPermission();
+        debugPrint("Requesting Notification Listener Permission via Native Call");
+        const platform = MethodChannel('com.familyguard/device_admin');
+        await platform.invokeMethod('requestNotificationListenerPermission');
+        
+        // Wait for the user to grant permission
+        for (int i = 0; i < 30; i++) { // wait up to 30 seconds
+          await Future.delayed(const Duration(seconds: 1));
+          isGranted = await NotificationListenerService.isPermissionGranted();
+          if (isGranted) break;
+        }
       }
 
       if (isGranted) {
