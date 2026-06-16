@@ -58,8 +58,11 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     const loadData = async () => {
       try {
-        const p = await fetchAPI(`/profiles/${profileId}`);
-        setProfile(p);
+        const profiles: Profile[] = await fetchAPI("/profiles/");
+        const currentProfile = profiles.find((p) => p.id === profileId);
+        if (currentProfile) {
+          setProfile(currentProfile);
+        }
 
         const sum = await fetchAPI(`/profiles/${profileId}/gamification`);
         setSummary(sum);

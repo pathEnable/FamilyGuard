@@ -39,6 +39,13 @@ def create_profile(
 def list_profiles(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(Profile).filter(Profile.parent_id == current_user.id).all()
 
+@router.get("/{profile_id}", response_model=ProfileSchema)
+def get_profile(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    profile = db.query(Profile).filter(Profile.id == profile_id, Profile.parent_id == current_user.id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
 @router.put("/{profile_id}", response_model=ProfileSchema)
 def update_profile(profile_id: int, profile_in: ProfileCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     profile = db.query(Profile).filter(Profile.id == profile_id, Profile.parent_id == current_user.id).first()
