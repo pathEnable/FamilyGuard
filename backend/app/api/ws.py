@@ -39,6 +39,14 @@ class ConnectionManager:
             for dead in dead_sockets:
                 self.disconnect(dead, parent_id)
 
+    async def broadcast_rules_updated(self, parent_id: int, profile_id: int):
+        message = {
+            "type": "RULES_UPDATED",
+            "profile_id": profile_id,
+            "message": "Les règles de filtrage ont été mises à jour."
+        }
+        await self.broadcast_to_parent(parent_id, message)
+
 manager = ConnectionManager()
 
 @router.websocket("/{parent_id}")

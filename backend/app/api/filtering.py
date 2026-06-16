@@ -143,7 +143,7 @@ async def add_web_filter_rule(
     db.commit()
     db.refresh(rule)
     
-    await manager.broadcast_rules_updated(profile.id)
+    await manager.broadcast_rules_updated(current_user.id, profile.id)
     return rule
 
 @router.delete("/profiles/{profile_id}/rules/{rule_id}")
@@ -175,7 +175,7 @@ async def delete_web_filter_rule(
     db.delete(rule)
     db.commit()
     
-    await manager.broadcast_rules_updated(profile.id)
+    await manager.broadcast_rules_updated(current_user.id, profile.id)
     return {"status": "success"}
 
 from fastapi import Body
@@ -201,7 +201,7 @@ async def toggle_strict_mode(
     profile.strict_web_filter = strict_mode
     db.commit()
     
-    await manager.broadcast_rules_updated(profile.id)
+    await manager.broadcast_rules_updated(current_user.id, profile.id)
     return {"status": "success", "strict_mode": strict_mode}
 
 # The old POST /check endpoint can still be kept for testing/debugging
