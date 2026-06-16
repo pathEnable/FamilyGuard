@@ -39,6 +39,9 @@ class MainActivity : FlutterActivity() {
 
     private lateinit var geofencingClient: GeofencingClient
     private var pendingBlockedApps: List<String> = emptyList()
+    private var pendingIsExamMode: Boolean = false
+    private var pendingAllowedApps: Array<String> = emptyArray()
+    private var pendingLockReason: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -217,15 +220,26 @@ class MainActivity : FlutterActivity() {
                     val startTime = calendar.timeInMillis
 
                     val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
-                    val usageMap = mutableMapOf<String, Int>()
+                    val usageMap = mutableMapOf<String, Map<String, Any>>()
+                    val pm = packageManager
                     
                     if (stats != null) {
                         for (stat in stats) {
                             val minutes = (stat.totalTimeInForeground / 60000).toInt()
                             if (minutes > 0) {
-                                // Accumuler s'il y a plusieurs entrées pour le même package
-                                val current = usageMap[stat.packageName] ?: 0
-                                usageMap[stat.packageName] = current + minutes
+                                val existing = usageMap[stat.packageName]
+                                val currentMinutes = (existing?.get("minutes") as? Int) ?: 0
+                                val appName = try {
+                                    val appInfo = pm.getApplicationInfo(stat.packageName, 0)
+                                    pm.getApplicationLabel(appInfo).toString()
+                                } catch (e: Exception) {
+                                    stat.packageName.substringAfterLast(".")
+                                        .replace("_", " ").replaceFirstChar { it.uppercase() }
+                                }
+                                usageMap[stat.packageName] = mapOf(
+                                    "minutes" to (currentMinutes + minutes),
+                                    "app_name" to appName
+                                )
                             }
                         }
                     }
@@ -333,6 +347,9 @@ class MainActivity : FlutterActivity() {
 
     private fun checkOverlayPermissionAndStart(isExamMode: Boolean, allowedApps: Array<String>, reason: String? = null) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            pendingIsExamMode = isExamMode
+            pendingAllowedApps = allowedApps
+            pendingLockReason = reason
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")
@@ -369,7 +386,7 @@ class MainActivity : FlutterActivity() {
         if (requestCode == OVERLAY_PERMISSION_REQ_CODE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (Settings.canDrawOverlays(this)) {
-                    startLockService()
+                    startLockService(pendingIsExamMode, pendingAllowedApps, pendingLockReason)
                 }
             }
         } else if (requestCode == VPN_REQ_CODE) {

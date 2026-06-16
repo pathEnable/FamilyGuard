@@ -180,8 +180,22 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
       const usageChannel = MethodChannel('com.familyguard/usage_stats');
       final dynamic result = await usageChannel.invokeMethod('getDailyAppUsage');
       if (result is Map) {
-        final Map<String, int> stats = Map<String, int>.from(result);
-        await ApiService.sendUsageStats(widget.profileId, stats);
+        final Map<String, int> stats = {};
+        final Map<String, String> appNames = {};
+        
+        for (final entry in result.entries) {
+          final packageName = entry.key as String;
+          final value = entry.value;
+          if (value is Map) {
+            stats[packageName] = (value['minutes'] as num?)?.toInt() ?? 0;
+            appNames[packageName] = (value['app_name'] as String?) ?? packageName;
+          } else if (value is int) {
+            // Backward compatibility
+            stats[packageName] = value;
+          }
+        }
+        
+        await ApiService.sendUsageStats(widget.profileId, stats, appNames: appNames);
       }
     } catch (e) {
       debugPrint('Error syncing usage stats: $e');

@@ -201,4 +201,8 @@ class LockService : Service() {
         handler.removeCallbacks(checkForegroundRunnable)
         removeLockScreen()
     }
+
+    companion object {
+        const val ACTION_START_LOCK = "ACTION_START_LOCK"
+    }
 }

@@ -723,9 +723,16 @@ class ApiService {
 
   // ── App Usage & Web Filtering API ──
 
-  static Future<void> sendUsageStats(int profileId, Map<String, int> stats) async {
+  static Future<void> sendUsageStats(int profileId, Map<String, int> stats, {Map<String, String>? appNames}) async {
     final token = await getToken();
     if (token == null) throw Exception('Non autorisé');
+
+    final Map<String, dynamic> body = {
+      'stats': stats,
+    };
+    if (appNames != null && appNames.isNotEmpty) {
+      body['app_names'] = appNames;
+    }
 
     final response = await http.post(
       Uri.parse('$baseUrl/profiles/$profileId/usage-stats'),
@@ -733,9 +740,7 @@ class ApiService {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
       },
-      body: jsonEncode({
-        'stats': stats,
-      }),
+      body: jsonEncode(body),
     );
 
     if (response.statusCode != 200) {

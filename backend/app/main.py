@@ -25,7 +25,7 @@ try:
             import add_app_name_column
             add_app_name_column.add_app_name_column()
             
-            logger.info("Checked/ran DB migrations on startup.")
+            print("Checked/ran DB migrations on startup.")
         except Exception:
             pass
 except Exception as e:

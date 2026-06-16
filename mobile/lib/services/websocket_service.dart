@@ -40,7 +40,7 @@ class WebSocketService {
       final uri = Uri.parse(ApiService.baseUrl);
       final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
       final portString = (uri.hasPort && uri.port != 80 && uri.port != 443) ? ':${uri.port}' : '';
-      _wsUrl = '$wsScheme://${uri.host}$portString/api/ws/$parentId?token=$token';
+      _wsUrl = '$wsScheme://${uri.host}$portString${uri.path}/ws/$parentId?token=$token';
 
       debugPrint('WS: Connexion à $_wsUrl');
       _channel = WebSocketChannel.connect(Uri.parse(_wsUrl!));
