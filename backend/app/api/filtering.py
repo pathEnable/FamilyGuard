@@ -20,13 +20,15 @@ class WebFilterRuleCreate(BaseModel):
 class WebFilterRuleResponse(BaseModel):
     id: int
     url_pattern: str
-    rule_type: str
+    rule_type: str # Or use FilterRuleType, but wait! We can use from app.models.user import FilterRuleType but it creates circular imports if placed incorrectly.
+    # To fix string serialization safely in Pydantic v1 and v2, we can just use Config
     
     class Config:
         orm_mode = True
+        use_enum_values = True
 
 class WebFilterSettingsResponse(BaseModel):
-    strict_mode: bool
+    strict_mode: bool = False
     rules: list[WebFilterRuleResponse]
 
 @router.get("/filter.bin")
@@ -105,7 +107,7 @@ def get_web_filters(
         raise HTTPException(status_code=404, detail="Profile not found")
         
     return WebFilterSettingsResponse(
-        strict_mode=profile.strict_web_filter,
+        strict_mode=profile.strict_web_filter or False,
         rules=profile.web_filter_rules
     )
 
@@ -176,10 +178,12 @@ async def delete_web_filter_rule(
     await manager.broadcast_rules_updated(profile.id)
     return {"status": "success"}
 
+from fastapi import Body
+
 @router.put("/profiles/{profile_id}/strict-mode")
 async def toggle_strict_mode(
     profile_id: int,
-    strict_mode: bool,
+    strict_mode: bool = Body(..., embed=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
