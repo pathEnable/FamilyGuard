@@ -18,14 +18,21 @@ try:
     with engine.begin() as conn:
         try:
             conn.execute(text('ALTER TABLE profiles ADD COLUMN strict_web_filter BOOLEAN DEFAULT FALSE;'))
-        except Exception:
-            pass
-        try:
-            conn.execute(text('ALTER TABLE app_usages ADD COLUMN package_name VARCHAR NOT NULL DEFAULT \'unknown\';'))
+            print("Added strict_web_filter to profiles")
         except Exception:
             pass
 except Exception as e:
-    print(f"Migration error: {e}")
+    pass
+
+try:
+    with engine.begin() as conn:
+        try:
+            conn.execute(text('ALTER TABLE app_usages ADD COLUMN package_name VARCHAR NOT NULL DEFAULT \'unknown\';'))
+            print("Added package_name to app_usages")
+        except Exception:
+            pass
+except Exception as e:
+    pass
 
 # Initialize Firebase Admin
 firebase.init_firebase()
