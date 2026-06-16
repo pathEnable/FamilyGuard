@@ -10,7 +10,7 @@ import { fetchAPI } from "@/lib/api";
 interface Profile {
   id: number;
   name: string;
-  age: int;
+  age: number;
   is_active: boolean;
   is_locked: boolean;
 }
