@@ -1,9 +1,13 @@
 package com.example.mobile
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
@@ -17,6 +21,7 @@ import android.widget.TextView
 import android.app.usage.UsageStatsManager
 import android.os.Handler
 import android.os.Looper
+import androidx.core.app.NotificationCompat
 
 class LockService : Service() {
 
@@ -25,6 +30,7 @@ class LockService : Service() {
     
     private var isExamMode: Boolean = false
     private var allowedApps: Array<String> = emptyArray()
+    private var lockReason: String? = null
     
     private val handler = Handler(Looper.getMainLooper())
     private val checkForegroundRunnable = object : Runnable {
@@ -41,7 +47,34 @@ class LockService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        startForegroundServiceNotification()
         showLockScreen()
+    }
+
+    private fun startForegroundServiceNotification() {
+        val channelId = "familyguard_lock_service"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "FamilyGuard Lock",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+
+        val notification: Notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("FamilyGuard actif")
+            .setContentText("Supervision du temps d'écran en cours...")
+            .setSmallIcon(android.R.drawable.ic_secure)
+            .setOngoing(true)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(1001, notification)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,6 +90,7 @@ class LockService : Service() {
         
         isExamMode = intent?.getBooleanExtra("isExamMode", false) ?: false
         allowedApps = intent?.getStringArrayExtra("allowedApps") ?: emptyArray()
+        lockReason = intent?.getStringExtra("reason")
         
         if (isExamMode && allowedApps.isNotEmpty()) {
             handler.post(checkForegroundRunnable)
@@ -120,6 +154,11 @@ class LockService : Service() {
         val pinInput = overlayView?.findViewById<EditText>(R.id.pinInput)
         val unlockButton = overlayView?.findViewById<Button>(R.id.unlockButton)
         val pinError = overlayView?.findViewById<TextView>(R.id.pinError)
+        val reasonText = overlayView?.findViewById<TextView>(R.id.lockReasonText)
+
+        if (lockReason != null) {
+            reasonText?.text = lockReason
+        }
 
         unlockButton?.setOnClickListener {
             val enteredPin = pinInput?.text?.toString() ?: ""

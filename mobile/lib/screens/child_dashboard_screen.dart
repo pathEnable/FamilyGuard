@@ -7,13 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../services/api_service.dart';
 import 'quests_screen.dart';
+import 'rewards_screen.dart';
+import 'mini_games_screen.dart';
+
 import '../services/harassment_detector_service.dart';
 import '../services/device_admin_service.dart';
 import '../services/vpn_service.dart';
 import '../services/location_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/bloom_filter.dart';
-import 'rewards_screen.dart';
 
 
 class ChildDashboardScreen extends ConsumerStatefulWidget {
@@ -57,7 +59,14 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   Timer? _statusTimer;
+  Timer? _usageSyncTimer;
   StreamSubscription? _wsSubscription;
+  StreamSubscription? _webFilterSubscription;
+
+  // Web Filtering Rules
+  bool _strictWebFilter = false;
+  List<String> _webWhitelist = [];
+  List<String> _webBlacklist = [];
 
   // Simulator
   BloomFilter? _bloomFilter;
@@ -79,6 +88,7 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
     );
 
     _loadTimeStatus();
+    _loadWebFilters();
     _loadBloomFilter();
     _checkPin();
     _initializePermissionsSequentially();
@@ -89,6 +99,7 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
       if (msg['type'] == 'rules_updated' && msg['profile_id'] == widget.profileId) {
         debugPrint('WS: Règles mises à jour reçues. Rechargement du statut...');
         _loadTimeStatus();
+        _loadWebFilters();
       }
     });
 
@@ -96,6 +107,85 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
     _statusTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       _loadTimeStatus();
     });
+
+    // Web Filter events from Accessibility Service
+    _webFilterSubscription = const EventChannel('com.familyguard/web_filter_events')
+        .receiveBroadcastStream()
+        .listen(_onWebFilterEvent);
+
+    // Sync Usage Stats every 15 minutes
+    _usageSyncTimer = Timer.periodic(const Duration(minutes: 15), (_) {
+      _syncUsageStats();
+    });
+    _syncUsageStats(); // Sync on startup
+  }
+
+  void _onWebFilterEvent(dynamic event) {
+    if (event is Map) {
+      final type = event['type'];
+      if (type == 'url') {
+        final url = event['value'] as String?;
+        if (url != null) {
+          final domain = Uri.tryParse(url)?.host ?? url;
+          
+          bool isWhitelisted = false;
+          for (final pattern in _webWhitelist) {
+            if (domain.contains(pattern)) {
+              isWhitelisted = true;
+              break;
+            }
+          }
+
+          if (isWhitelisted) {
+            // Priority: Allow
+            return;
+          }
+
+          bool isBlacklisted = false;
+          for (final pattern in _webBlacklist) {
+            if (domain.contains(pattern)) {
+              isBlacklisted = true;
+              break;
+            }
+          }
+
+          if (isBlacklisted) {
+            _invokeStartLock(reason: 'URL Liste Noire: $domain');
+            return;
+          }
+
+          if (_strictWebFilter) {
+            _invokeStartLock(reason: 'Mode Strict (non autorisé): $domain');
+            return;
+          }
+
+          if (_bloomFilter != null && _bloomFilter!.contains(domain)) {
+            // Block explicitly via categories
+            _invokeStartLock(reason: 'Catégorie Bloquée: $domain');
+          }
+        }
+      } else if (type == 'text') {
+        final word = event['word'] as String?;
+        final text = event['text'] as String?;
+        if (word != null) {
+          ApiService.reportExplicitSearch(widget.profileId, text ?? '', word);
+          _invokeStartLock(reason: 'Recherche non autorisée détectée');
+        }
+      }
+    }
+  }
+
+  Future<void> _syncUsageStats() async {
+    try {
+      const usageChannel = MethodChannel('com.familyguard/usage_stats');
+      final dynamic result = await usageChannel.invokeMethod('getDailyAppUsage');
+      if (result is Map) {
+        final Map<String, int> stats = Map<String, int>.from(result);
+        await ApiService.sendUsageStats(widget.profileId, stats);
+      }
+    } catch (e) {
+      debugPrint('Error syncing usage stats: $e');
+    }
   }
 
   Future<void> _saveOfflineStatus() async {
@@ -147,13 +237,53 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
   void dispose() {
     _pulseController.dispose();
     _statusTimer?.cancel();
+    _usageSyncTimer?.cancel();
     _sosTimer?.cancel();
     _urlController.dispose();
     LocationService.stop();
     HarassmentDetectorService.stop();
     _wsSubscription?.cancel();
+    _webFilterSubscription?.cancel();
     WebSocketService.instance.disconnect();
     super.dispose();
+  }
+
+  Future<void> _loadWebFilters() async {
+    try {
+      final data = await ApiService.getWebFilters(widget.profileId);
+      if (!mounted) return;
+      setState(() {
+        _strictWebFilter = data['strict_mode'] ?? false;
+        final rules = List<dynamic>.from(data['rules'] ?? []);
+        _webWhitelist = rules.where((r) => r['rule_type'] == 'WHITELIST').map((r) => r['url_pattern'] as String).toList();
+        _webBlacklist = rules.where((r) => r['rule_type'] == 'BLACKLIST').map((r) => r['url_pattern'] as String).toList();
+        _saveOfflineWebFilters();
+      });
+    } catch (e) {
+      await _loadOfflineWebFilters();
+    }
+  }
+
+  Future<void> _saveOfflineWebFilters() async {
+    final box = Hive.box('time_rules');
+    final filterData = {
+      'strict_mode': _strictWebFilter,
+      'whitelist': _webWhitelist,
+      'blacklist': _webBlacklist,
+    };
+    await box.put('web_filters_${widget.profileId}', filterData);
+  }
+
+  Future<void> _loadOfflineWebFilters() async {
+    final box = Hive.box('time_rules');
+    final filterData = box.get('web_filters_${widget.profileId}');
+    if (filterData != null && mounted) {
+      setState(() {
+        _strictWebFilter = filterData['strict_mode'] ?? false;
+        _webWhitelist = List<String>.from(filterData['whitelist'] ?? []);
+        _webBlacklist = List<String>.from(filterData['blacklist'] ?? []);
+      });
+    }
   }
 
   Future<void> _loadTimeStatus() async {
@@ -204,10 +334,11 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
 
   /// Centralized helper to invoke the native startLock method
   /// with exam mode parameters when applicable.
-  void _invokeStartLock() {
+  void _invokeStartLock({String? reason}) {
     platform.invokeMethod('startLock', {
       'isExamMode': _isExamMode,
       'allowedApps': _allowedApps,
+      'reason': reason,
     });
   }
 
@@ -232,9 +363,45 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
   }
 
   Future<void> _initializePermissionsSequentially() async {
+    await _checkOverlayPermission();
     await _checkDeviceAdmin();
     await LocationService.initialize();
     await HarassmentDetectorService.initialize();
+  }
+
+  Future<void> _checkOverlayPermission() async {
+    try {
+      final hasPermission = await platform.invokeMethod('hasOverlayPermission') as bool;
+      if (!hasPermission && mounted) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Permission Requise'),
+            content: const Text(
+              'FamilyGuard a besoin de la permission d\'affichage par-dessus les autres applications pour verrouiller l\'appareil quand le temps est écoulé.\n\nAppuyez sur Autoriser puis activez la permission.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await platform.invokeMethod('requestOverlayPermission');
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+                child: const Text('Autoriser'),
+              ),
+            ],
+          ),
+        );
+        // Wait and re-check
+        await Future.delayed(const Duration(seconds: 2));
+        final granted = await platform.invokeMethod('hasOverlayPermission') as bool;
+        if (!granted) {
+          await _checkOverlayPermission();
+        }
+      }
+    } catch (e) {
+      debugPrint('Overlay permission check failed: $e');
+    }
   }
 
   Future<void> _checkDeviceAdmin() async {
@@ -579,97 +746,63 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
 
   // ─── Timer Screen ───
   Widget _buildTimerScreen() {
-    return Column(
-      children: [
+    return CustomScrollView(
+      slivers: [
         // Top bar
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Bonjour ${widget.profileName} 👋',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _hasLimit ? 'Ton temps d\'écran aujourd\'hui' : 'Pas de limite configurée',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _isExamMode
-                      ? const Color(0xFFF97316).withValues(alpha: 0.2)
-                      : const Color(0xFF10B981).withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      _isExamMode ? Icons.school_rounded : Icons.circle,
-                      size: _isExamMode ? 14 : 8,
-                      color: _isExamMode ? const Color(0xFFF97316) : const Color(0xFF10B981),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _isExamMode ? 'Examen' : 'Actif',
-                      style: TextStyle(
-                        color: _isExamMode ? const Color(0xFFF97316) : const Color(0xFF10B981),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Exam mode banner
-        if (_isExamMode)
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF97316).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFF97316).withValues(alpha: 0.3)),
-            ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Icon(Icons.school_rounded, color: Color(0xFFF97316), size: 20),
-                const SizedBox(width: 10),
-                Expanded(
+                Flexible(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Mode Examen actif 📝',
-                        style: TextStyle(
+                      Text(
+                        'Bonjour ${widget.profileName} 👋',
+                        style: const TextStyle(
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFFF97316),
+                          color: Colors.black87,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _hasLimit ? 'Ton temps d\'écran aujourd\'hui' : 'Pas de limite configurée',
+                        style: const TextStyle(
                           fontSize: 13,
+                          color: Colors.black54,
                         ),
                       ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _isExamMode
+                        ? const Color(0xFFF97316).withValues(alpha: 0.2)
+                        : const Color(0xFF10B981).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _isExamMode ? Icons.school_rounded : Icons.circle,
+                        size: _isExamMode ? 14 : 8,
+                        color: _isExamMode ? const Color(0xFFF97316) : const Color(0xFF10B981),
+                      ),
+                      const SizedBox(width: 6),
                       Text(
-                        'Seules ${_allowedApps.length} app(s) autorisée(s)',
-                        style: const TextStyle(
-                          color: Colors.black54,
-                          fontSize: 11,
+                        _isExamMode ? 'Examen' : 'Actif',
+                        style: TextStyle(
+                          color: _isExamMode ? const Color(0xFFF97316) : const Color(0xFF10B981),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
@@ -678,60 +811,106 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
               ],
             ),
           ),
+        ),
+
+        // Exam mode banner
+        if (_isExamMode)
+          SliverToBoxAdapter(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF97316).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFF97316).withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.school_rounded, color: Color(0xFFF97316), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Mode Examen actif 📝',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFF97316),
+                            fontSize: 13,
+                          ),
+                        ),
+                        Text(
+                          'Seules ${_allowedApps.length} app(s) autorisée(s)',
+                          style: const TextStyle(
+                            color: Colors.black54,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
 
         // Timer circle
-        Expanded(
-          child: Center(
-            child: AnimatedBuilder(
-              animation: _pulseAnimation,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: _hasLimit && _minutesRemaining <= 15 ? _pulseAnimation.value : 1.0,
-                  child: child,
-                );
-              },
-              child: SizedBox(
-                width: 280,
-                height: 280,
-                child: CustomPaint(
-                  painter: _TimerPainter(
-                    progress: _hasLimit && _dailyLimitMinutes > 0
-                        ? _minutesRemaining / _dailyLimitMinutes
-                        : 1.0,
-                    color: _getTimerColor(),
-                    backgroundColor: Colors.grey.shade200,
-                  ),
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          _hasLimit ? _formatTime(_minutesRemaining) : '∞',
-                          style: TextStyle(
-                            fontSize: _hasLimit ? 48 : 64,
-                            fontWeight: FontWeight.bold,
-                            color: _getTimerColor(),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _hasLimit ? 'restant' : 'Temps libre',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            color: Colors.black54,
-                          ),
-                        ),
-                        if (_hasLimit) ...[
-                          const SizedBox(height: 12),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: AnimatedBuilder(
+                animation: _pulseAnimation,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: _hasLimit && _minutesRemaining <= 15 ? _pulseAnimation.value : 1.0,
+                    child: child,
+                  );
+                },
+                child: SizedBox(
+                  width: 240,
+                  height: 240,
+                  child: CustomPaint(
+                    painter: _TimerPainter(
+                      progress: _hasLimit && _dailyLimitMinutes > 0
+                          ? _minutesRemaining / _dailyLimitMinutes
+                          : 1.0,
+                      color: _getTimerColor(),
+                      backgroundColor: Colors.grey.shade200,
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
                           Text(
-                            '${_formatTime(_minutesUsed)} utilisé',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.black38,
+                            _hasLimit ? _formatTime(_minutesRemaining) : '∞',
+                            style: TextStyle(
+                              fontSize: _hasLimit ? 42 : 56,
+                              fontWeight: FontWeight.bold,
+                              color: _getTimerColor(),
                             ),
                           ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _hasLimit ? 'restant' : 'Temps libre',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              color: Colors.black54,
+                            ),
+                          ),
+                          if (_hasLimit) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              '${_formatTime(_minutesUsed)} utilisé',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.black38,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -740,94 +919,96 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
           ),
         ),
 
-        // Simulator / Gamification row
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => RewardsScreen(profileId: widget.profileId),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.stars, color: Colors.amber),
-                      label: const Text('Récompenses', style: TextStyle(color: Colors.black87)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          side: BorderSide(color: Colors.grey.shade300),
-                        ),
-                        elevation: 0,
-                      ),
+        // Gamification buttons row
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildGamificationButton(
+                    context,
+                    icon: Icons.games,
+                    color: Colors.purple,
+                    label: 'Jeux',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => MiniGamesScreen(profileId: widget.profileId)),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => QuestsScreen(profileId: widget.profileId, isParent: false),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.assignment, color: Colors.blue),
-                      label: const Text('Quêtes', style: TextStyle(color: Colors.black87)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          side: BorderSide(color: Colors.grey.shade300),
-                        ),
-                        elevation: 0,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _hasLimit && _minutesRemaining >= 5 ? _confirmDisconnectEarly : () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Il faut au moins 5 minutes restantes pour gagner des points.')),
-                    );
-                  },
-                  icon: const Icon(Icons.power_settings_new, color: Colors.white),
-                  label: const Text('Déconnexion Anticipée', style: TextStyle(color: Colors.white)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _hasLimit && _minutesRemaining >= 5 ? const Color(0xFF10B981) : Colors.grey,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    elevation: 0,
                   ),
                 ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildGamificationButton(
+                    context,
+                    icon: Icons.stars,
+                    color: Colors.amber,
+                    label: 'Boutique',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => RewardsScreen(profileId: widget.profileId)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildGamificationButton(
+                    context,
+                    icon: Icons.assignment,
+                    color: Colors.blue,
+                    label: 'Quêtes',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => QuestsScreen(profileId: widget.profileId, isParent: false)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Early disconnect button
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _hasLimit && _minutesRemaining >= 5 ? _confirmDisconnectEarly : () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Il faut au moins 5 minutes restantes pour gagner des points.')),
+                  );
+                },
+                icon: const Icon(Icons.power_settings_new, color: Colors.white, size: 18),
+                label: const Text('Déconnexion Anticipée', style: TextStyle(color: Colors.white, fontSize: 13)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _hasLimit && _minutesRemaining >= 5 ? const Color(0xFF10B981) : Colors.grey,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  elevation: 0,
+                ),
               ),
-            ],
+            ),
           ),
         ),
 
         // Simulateur de Navigation (VPN test)
-        _buildSimulatorCard(),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: _buildSimulatorCard(),
+          ),
+        ),
 
         // SOS Button
-        Padding(
-          padding: const EdgeInsets.only(bottom: 48, top: 24),
-          child: _buildSosButton(),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 32, top: 24),
+            child: _buildSosButton(),
+          ),
         ),
       ],
     );
@@ -1011,6 +1192,35 @@ class ChildDashboardScreenState extends ConsumerState<ChildDashboardScreen>
             )
           ]
         ],
+      ),
+    );
+  }
+  Widget _buildGamificationButton(BuildContext context, {required IconData icon, required MaterialColor color, required String label, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: color.shade50,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.shade200, width: 1.5),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color.shade700, size: 28),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color.shade900,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -13,6 +13,22 @@ from app.services.bloom_generator import bloom_manager
 
 router = APIRouter()
 
+class WebFilterRuleCreate(BaseModel):
+    url_pattern: str
+    rule_type: str
+
+class WebFilterRuleResponse(BaseModel):
+    id: int
+    url_pattern: str
+    rule_type: str
+    
+    class Config:
+        orm_mode = True
+
+class WebFilterSettingsResponse(BaseModel):
+    strict_mode: bool
+    rules: list[WebFilterRuleResponse]
+
 @router.get("/filter.bin")
 def download_bloom_filter():
     """
@@ -72,6 +88,117 @@ async def log_blocked_url(
     await manager.broadcast_to_parent(current_user.id, message)
 
     return {"status": "success"}
+
+@router.get("/profiles/{profile_id}/rules", response_model=WebFilterSettingsResponse)
+def get_web_filters(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import Profile, WebFilterRule
+    profile = db.query(Profile).filter(
+        Profile.id == profile_id,
+        Profile.parent_id == current_user.id
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    return WebFilterSettingsResponse(
+        strict_mode=profile.strict_web_filter,
+        rules=profile.web_filter_rules
+    )
+
+@router.post("/profiles/{profile_id}/rules", response_model=WebFilterRuleResponse)
+async def add_web_filter_rule(
+    profile_id: int,
+    request: WebFilterRuleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import Profile, WebFilterRule, FilterRuleType
+    from app.api.ws import manager
+    
+    profile = db.query(Profile).filter(
+        Profile.id == profile_id,
+        Profile.parent_id == current_user.id
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    try:
+        rule_type = FilterRuleType(request.rule_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid rule_type. Must be WHITELIST or BLACKLIST.")
+        
+    rule = WebFilterRule(
+        profile_id=profile_id,
+        url_pattern=request.url_pattern,
+        rule_type=rule_type
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    
+    await manager.broadcast_rules_updated(profile.id)
+    return rule
+
+@router.delete("/profiles/{profile_id}/rules/{rule_id}")
+async def delete_web_filter_rule(
+    profile_id: int,
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import Profile, WebFilterRule
+    from app.api.ws import manager
+    
+    profile = db.query(Profile).filter(
+        Profile.id == profile_id,
+        Profile.parent_id == current_user.id
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    rule = db.query(WebFilterRule).filter(
+        WebFilterRule.id == rule_id,
+        WebFilterRule.profile_id == profile.id
+    ).first()
+    
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+        
+    db.delete(rule)
+    db.commit()
+    
+    await manager.broadcast_rules_updated(profile.id)
+    return {"status": "success"}
+
+@router.put("/profiles/{profile_id}/strict-mode")
+async def toggle_strict_mode(
+    profile_id: int,
+    strict_mode: bool,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import Profile
+    from app.api.ws import manager
+    
+    profile = db.query(Profile).filter(
+        Profile.id == profile_id,
+        Profile.parent_id == current_user.id
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    profile.strict_web_filter = strict_mode
+    db.commit()
+    
+    await manager.broadcast_rules_updated(profile.id)
+    return {"status": "success", "strict_mode": strict_mode}
 
 # The old POST /check endpoint can still be kept for testing/debugging
 class URLCheckRequest(BaseModel):

@@ -46,7 +46,7 @@ with engine.connect() as conn:
     existing_activity = [row[0] for row in result]
     print(f"\nExisting activitytype values: {existing_activity}")
 
-    activity_values = ["SOS_TRIGGERED", "WEB_BLOCKED", "TIME_LIMIT_REACHED", "GEOFENCE_ALERT", "CYBERBULLYING_DETECTED"]
+    activity_values = ["SOS_TRIGGERED", "WEB_BLOCKED", "TIME_LIMIT_REACHED", "GEOFENCE_ALERT", "CYBERBULLYING_DETECTED", "EXPLICIT_SEARCH"]
     for value in activity_values:
         if value not in existing_activity:
             print(f"  Adding '{value}' to activitytype enum...")
@@ -57,4 +57,12 @@ with engine.connect() as conn:
 
     conn.commit()
 
-print("\n[DONE] Enum migration complete!")
+    # Also update app_usages schema if needed
+    try:
+        conn.execute(text("ALTER TABLE app_usages ADD COLUMN IF NOT EXISTS package_name VARCHAR NOT NULL DEFAULT 'unknown'"))
+        print("  [OK] Ensured package_name exists in app_usages table")
+        conn.commit()
+    except Exception as e:
+        print(f"  [WARN] Failed to update app_usages: {e}")
+
+print("\n[DONE] Schema migration complete!")

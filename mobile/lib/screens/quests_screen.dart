@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/websocket_service.dart';
+import '../theme.dart';
+import 'dart:async';
 
 class QuestsScreen extends StatefulWidget {
   final int profileId;
@@ -14,11 +17,24 @@ class QuestsScreen extends StatefulWidget {
 class QuestsScreenState extends State<QuestsScreen> {
   List<dynamic> quests = [];
   bool isLoading = true;
+  StreamSubscription? _wsSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadQuests();
+    
+    _wsSubscription = WebSocketService.instance.messages.listen((msg) {
+      if (msg['type'] == 'gamification_updated' && msg['profile_id'] == widget.profileId) {
+        _loadQuests();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _wsSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadQuests() async {
@@ -79,7 +95,9 @@ class QuestsScreenState extends State<QuestsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mes Quêtes 🏆'),
+        title: const Text('Mes Quêtes 🏆', style: TextStyle(color: Colors.white)),
+        backgroundColor: SafeChildColors.primary,
+        iconTheme: const IconThemeData(color: Colors.white),
         elevation: 0,
       ),
       body: isLoading
@@ -103,10 +121,10 @@ class QuestsScreenState extends State<QuestsScreen> {
     String statusText = 'En cours';
 
     if (status == 'COMPLETED_BY_CHILD') {
-      statusColor = Colors.orange;
+      statusColor = SafeChildColors.warning;
       statusText = 'En attente de validation';
     } else if (status == 'VALIDATED') {
-      statusColor = Colors.green;
+      statusColor = SafeChildColors.success;
       statusText = 'Validée';
     }
 
@@ -131,12 +149,12 @@ class QuestsScreenState extends State<QuestsScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha: 0.1),
+                    color: SafeChildColors.primaryLight,
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     '+${quest['points_reward']} pts',
-                    style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: SafeChildColors.primary, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -160,7 +178,8 @@ class QuestsScreenState extends State<QuestsScreen> {
                   ElevatedButton(
                     onPressed: () => _completeQuest(quest['id']),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
+                      backgroundColor: SafeChildColors.primary,
+                      foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
                     child: const Text('Terminer'),
@@ -169,7 +188,8 @@ class QuestsScreenState extends State<QuestsScreen> {
                   ElevatedButton(
                     onPressed: () => _validateQuest(quest['id']),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: SafeChildColors.success,
+                      foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
                     child: const Text('Valider'),

@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.models.user import User, Profile, SafeZone, ActivityLog, ActivityType
 from app.api.deps import get_current_user
 from app.core import firebase
+from app.api.ws import manager
 
 router = APIRouter()
 
@@ -30,7 +31,7 @@ def get_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return c * r
 
 @router.post("/{profile_id}/location")
-def update_location(
+async def update_location(
     profile_id: int,
     location: LocationUpdate,
     db: Session = Depends(get_db),
@@ -82,6 +83,14 @@ def update_location(
                 
                 # Just trigger once per update to avoid spamming if outside multiple zones
                 break
+
+    # Broadcast location update to parent
+    await manager.broadcast_to_parent(current_user.id, {
+        "type": "location_updated",
+        "profile_id": profile.id,
+        "latitude": location.latitude,
+        "longitude": location.longitude
+    })
 
     return {"status": "ok"}
 

@@ -295,7 +295,9 @@ def get_weekly_usage(
         AppUsage.date <= today
     ).all()
 
-    usage_map = {u.date: u.minutes_used for u in usages}
+    usage_map = {}
+    for u in usages:
+        usage_map[u.date] = usage_map.get(u.date, 0) + u.minutes_used
     
     result = []
     # French day abbreviations
@@ -354,4 +356,108 @@ def trigger_harassment_alert(
         )
 
     return {"status": "success", "message": "Harassment alert processed"}
+
+
+from typing import Dict
+
+class UsageStatsPayload(BaseModel):
+    stats: Dict[str, int]  # package_name -> minutes_used
+
+@router.post("/{profile_id}/usage-stats")
+async def update_usage_stats(
+    profile_id: int,
+    payload: UsageStatsPayload,
+    db: Session = Depends(get_db)
+):
+    """Called periodically by the child app to sync app usage."""
+    today = date.today()
+    
+    # We just overwrite today's stats for each package sent by the device
+    for package_name, minutes in payload.stats.items():
+        existing = db.query(AppUsage).filter(
+            AppUsage.profile_id == profile_id,
+            AppUsage.package_name == package_name,
+            AppUsage.date == today
+        ).first()
+        
+        if existing:
+            existing.minutes_used = minutes
+        else:
+            new_stat = AppUsage(
+                profile_id=profile_id,
+                package_name=package_name,
+                date=today,
+                minutes_used=minutes
+            )
+            db.add(new_stat)
+            
+    db.commit()
+    
+    # Broadcast to parent
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if profile:
+        await manager.broadcast_to_parent(profile.parent_id, {
+            "type": "usage_updated",
+            "profile_id": profile.id
+        })
+        
+    return {"status": "success"}
+
+# ──────────────────────────────────────────────────────────
+# DETAILED APP USAGE & SEARCH LOGS
+# ──────────────────────────────────────────────────────────
+
+from app.utils.app_names import get_app_info
+
+@router.get("/{profile_id}/app-usage-detail")
+def get_app_usage_detail(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed app usage for today."""
+    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    today = date.today()
+    usages = db.query(AppUsage).filter(
+        AppUsage.profile_id == profile_id,
+        AppUsage.date == today
+    ).order_by(AppUsage.minutes_used.desc()).all()
+
+    result = []
+    for u in usages:
+        info = get_app_info(u.package_name)
+        result.append({
+            "package_name": u.package_name,
+            "app_name": info["name"],
+            "category": info["category"],
+            "icon": info["icon"],
+            "minutes_today": u.minutes_used
+        })
+    
+    return result
+
+@router.get("/{profile_id}/explicit-search-logs")
+def get_explicit_search_logs(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get the history of explicit searches."""
+    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    logs = db.query(ActivityLog).filter(
+        ActivityLog.profile_id == profile_id,
+        ActivityLog.activity_type == ActivityType.EXPLICIT_SEARCH
+    ).order_by(ActivityLog.created_at.desc()).limit(50).all()
+
+    return [{
+        "id": log.id,
+        "description": log.description,
+        "created_at": log.created_at.isoformat()
+    } for log in logs]
 

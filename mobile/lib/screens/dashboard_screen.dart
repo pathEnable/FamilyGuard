@@ -1,12 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
+import '../services/websocket_service.dart';
+import '../theme.dart';
+import 'dart:async';
 import 'login_screen.dart';
 import 'child_dashboard_screen.dart';
 import 'add_profile_screen.dart';
 import 'edit_profile_screen.dart';
 import 'time_rules_screen.dart';
 import 'logs_screen.dart';
+import 'web_filtering_screen.dart';
+import 'parent_quiz_management_screen.dart';
+import 'app_management_screen.dart';
+import 'explicit_searches_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -19,11 +26,28 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
   List<dynamic> _profiles = [];
   bool _isLoading = true;
   String _errorMessage = '';
+  StreamSubscription? _wsSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadProfiles();
+    
+    WebSocketService.instance.connect();
+    _wsSubscription = WebSocketService.instance.messages.listen((msg) {
+      if (msg['type'] == 'usage_updated' || 
+          msg['type'] == 'gamification_updated' || 
+          msg['type'] == 'rules_updated' || 
+          msg['type'] == 'location_updated') {
+        _loadProfiles();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _wsSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadProfiles() async {
@@ -129,7 +153,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                     }
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
+                    backgroundColor: SafeChildColors.primary,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                   child: const Text('Enregistrer', style: TextStyle(color: Colors.white)),
@@ -235,8 +259,8 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                               width: 30,
                               height: 150 * percentage + 4, // min height of 4
                               decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF60A5FA), Color(0xFF2563EB)],
+                                gradient: LinearGradient(
+                                  colors: [SafeChildColors.primaryLight, SafeChildColors.primary],
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                 ),
@@ -268,7 +292,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Vos Enfants', style: TextStyle(color: Colors.white)),
-        backgroundColor: const Color(0xFF2563EB),
+        backgroundColor: SafeChildColors.primary,
         actions: [
           IconButton(
             icon: const Icon(Icons.history_rounded, color: Colors.white),
@@ -295,7 +319,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                     padding: const EdgeInsets.all(16.0),
                     child: Text(
                       _errorMessage,
-                      style: const TextStyle(color: Color(0xFFEF4444)),
+                      style: const TextStyle(color: SafeChildColors.danger),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -314,7 +338,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                           const SizedBox(height: 8),
                           const Text(
                             'Créez un profil pour commencer.',
-                            style: TextStyle(color: Color(0xFF64748B)),
+                            style: TextStyle(color: SafeChildColors.textMuted),
                           ),
                         ],
                       ),
@@ -335,8 +359,8 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                           child: ListTile(
                             contentPadding: const EdgeInsets.all(16),
                             leading: CircleAvatar(
-                              backgroundColor: const Color(0xFFDBEAFE),
-                              foregroundColor: const Color(0xFF2563EB),
+                              backgroundColor: SafeChildColors.primaryLight,
+                              foregroundColor: SafeChildColors.primary,
                               radius: 28,
                               child: Text(
                                 profile['name'][0].toString().toUpperCase(),
@@ -360,14 +384,14 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                                       height: 10,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        color: isActive ? const Color(0xFF10B981) : Colors.grey,
+                                        color: isActive ? SafeChildColors.success : Colors.grey,
                                       ),
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
                                       isActive ? 'Actif' : 'Inactif',
                                       style: TextStyle(
-                                        color: isActive ? const Color(0xFF10B981) : Colors.grey,
+                                        color: isActive ? SafeChildColors.success : Colors.grey,
                                         fontWeight: FontWeight.w500,
                                       ),
                                     ),
@@ -381,7 +405,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                                 IconButton(
                                   icon: Icon(
                                     (profile['is_locked'] ?? false) ? Icons.lock : Icons.lock_open,
-                                    color: (profile['is_locked'] ?? false) ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                                    color: (profile['is_locked'] ?? false) ? SafeChildColors.danger : SafeChildColors.success,
                                   ),
                                   tooltip: 'Verrouiller/Déverrouiller',
                                   onPressed: () {
@@ -389,7 +413,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                                   },
                                 ),
                                 PopupMenuButton<String>(
-                                  icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF64748B)),
+                                  icon: const Icon(Icons.more_vert_rounded, color: SafeChildColors.textMuted),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                   onSelected: (value) async {
                                     switch (value) {
@@ -419,13 +443,59 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
                                           ),
                                         );
                                         break;
+                                      case 'web':
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => WebFilteringScreen(
+                                              profileId: profile['id'],
+                                            ),
+                                          ),
+                                        );
+                                        break;
+                                      case 'quiz':
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => ParentQuizManagementScreen(
+                                              profileId: profile['id'],
+                                            ),
+                                          ),
+                                        );
+                                        break;
+                                      case 'apps':
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => AppManagementScreen(
+                                              profileId: profile['id'],
+                                              profileName: profile['name'],
+                                            ),
+                                          ),
+                                        );
+                                        break;
+                                      case 'searches':
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => ExplicitSearchesScreen(
+                                              profileId: profile['id'],
+                                              profileName: profile['name'],
+                                            ),
+                                          ),
+                                        );
+                                        break;
                                     }
                                   },
                                   itemBuilder: (_) => [
-                                    const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_rounded, color: Color(0xFF3B82F6)), title: Text('Modifier'), dense: true, contentPadding: EdgeInsets.zero)),
-                                    const PopupMenuItem(value: 'chart', child: ListTile(leading: Icon(Icons.bar_chart_rounded, color: Color(0xFF64748B)), title: Text('Temps d\'écran'), dense: true, contentPadding: EdgeInsets.zero)),
-                                    const PopupMenuItem(value: 'pin', child: ListTile(leading: Icon(Icons.pin, color: Color(0xFF64748B)), title: Text('Code PIN'), dense: true, contentPadding: EdgeInsets.zero)),
-                                    const PopupMenuItem(value: 'time', child: ListTile(leading: Icon(Icons.timer_outlined, color: Color(0xFF64748B)), title: Text('Règles de temps'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_rounded, color: SafeChildColors.primary), title: Text('Modifier'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'chart', child: ListTile(leading: Icon(Icons.bar_chart_rounded, color: SafeChildColors.textMuted), title: Text('Temps d\'écran'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'apps', child: ListTile(leading: Icon(Icons.apps, color: SafeChildColors.textMuted), title: Text('Gestion Apps'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'searches', child: ListTile(leading: Icon(Icons.search_off, color: SafeChildColors.textMuted), title: Text('Recherches bloquées'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'time', child: ListTile(leading: Icon(Icons.timer_outlined, color: SafeChildColors.textMuted), title: Text('Règles de temps'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'web', child: ListTile(leading: Icon(Icons.security, color: SafeChildColors.textMuted), title: Text('Filtrage Web'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'quiz', child: ListTile(leading: Icon(Icons.quiz_outlined, color: SafeChildColors.textMuted), title: Text('Questions Quiz'), dense: true, contentPadding: EdgeInsets.zero)),
+                                    const PopupMenuItem(value: 'pin', child: ListTile(leading: Icon(Icons.pin, color: SafeChildColors.textMuted), title: Text('Code PIN'), dense: true, contentPadding: EdgeInsets.zero)),
                                   ],
                                 ),
                                 const Icon(Icons.chevron_right),
@@ -456,7 +526,7 @@ class DashboardScreenState extends ConsumerState<DashboardScreen> {
             _loadProfiles(); // Reload profiles if a new one was added
           }
         },
-        backgroundColor: const Color(0xFF2563EB),
+        backgroundColor: SafeChildColors.primary,
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );

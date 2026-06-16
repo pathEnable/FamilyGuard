@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">FamilyGuard a besoin de ce service pour bloquer les sites web non autorisés et protéger la navigation de votre enfant.</string>
+</resources>

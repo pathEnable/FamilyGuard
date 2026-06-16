@@ -14,9 +14,16 @@ import com.google.android.gms.location.LocationServices
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.net.VpnService
+import android.app.usage.UsageStatsManager
+import android.app.AppOpsManager
+import android.os.Process
+import java.util.Calendar
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 
 class MainActivity : FlutterActivity() {
     private val LOCK_CHANNEL = "com.familyguard/lock"
@@ -24,6 +31,8 @@ class MainActivity : FlutterActivity() {
     private val GEOFENCE_CHANNEL = "com.familyguard/geofence"
     private val DEVICE_ADMIN_CHANNEL = "com.familyguard/device_admin"
     private val VPN_CHANNEL = "com.familyguard/vpn"
+    private val USAGE_STATS_CHANNEL = "com.familyguard/usage_stats"
+    private val WEB_FILTER_EVENT_CHANNEL = "com.familyguard/web_filter_events"
     private val OVERLAY_PERMISSION_REQ_CODE = 1234
     private val DEVICE_ADMIN_REQ_CODE = 1235
     private val VPN_REQ_CODE = 1236
@@ -42,7 +51,8 @@ class MainActivity : FlutterActivity() {
                 "startLock" -> {
                     val allowedApps = call.argument<List<String>>("allowedApps") ?: emptyList()
                     val isExamMode = call.argument<Boolean>("isExamMode") ?: false
-                    checkOverlayPermissionAndStart(isExamMode, allowedApps.toTypedArray())
+                    val reason = call.argument<String>("reason")
+                    checkOverlayPermissionAndStart(isExamMode, allowedApps.toTypedArray(), reason)
                     result.success(null)
                 }
                 "stopLock" -> {
@@ -184,6 +194,78 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // ── Usage Stats Channel ──
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, USAGE_STATS_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "hasUsageStatsPermission" -> {
+                    val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+                    val mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+                    result.success(mode == AppOpsManager.MODE_ALLOWED)
+                }
+                "requestUsageStatsPermission" -> {
+                    startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                    result.success(true)
+                }
+                "getDailyAppUsage" -> {
+                    val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                    val calendar = Calendar.getInstance()
+                    val endTime = calendar.timeInMillis
+                    calendar.set(Calendar.HOUR_OF_DAY, 0)
+                    calendar.set(Calendar.MINUTE, 0)
+                    calendar.set(Calendar.SECOND, 0)
+                    val startTime = calendar.timeInMillis
+
+                    val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+                    val usageMap = mutableMapOf<String, Int>()
+                    
+                    if (stats != null) {
+                        for (stat in stats) {
+                            val minutes = (stat.totalTimeInForeground / 60000).toInt()
+                            if (minutes > 0) {
+                                // Accumuler s'il y a plusieurs entrées pour le même package
+                                val current = usageMap[stat.packageName] ?: 0
+                                usageMap[stat.packageName] = current + minutes
+                            }
+                        }
+                    }
+                    result.success(usageMap)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ── Web Filter Event Channel ──
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, WEB_FILTER_EVENT_CHANNEL).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                private var receiver: BroadcastReceiver? = null
+
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    receiver = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context?, intent: Intent?) {
+                            if (intent?.action == WebFilterAccessibilityService.ACTION_URL_DETECTED) {
+                                val url = intent.getStringExtra("url")
+                                events?.success(mapOf("type" to "url", "value" to url))
+                            } else if (intent?.action == WebFilterAccessibilityService.ACTION_TEXT_DETECTED) {
+                                val text = intent.getStringExtra("text")
+                                val word = intent.getStringExtra("word")
+                                events?.success(mapOf("type" to "text", "text" to text, "word" to word))
+                            }
+                        }
+                    }
+                    val filter = IntentFilter().apply {
+                        addAction(WebFilterAccessibilityService.ACTION_URL_DETECTED)
+                        addAction(WebFilterAccessibilityService.ACTION_TEXT_DETECTED)
+                    }
+                    registerReceiver(receiver, filter)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    receiver?.let { unregisterReceiver(it) }
+                    receiver = null
+                }
+            }
+        )
     }
 
     // ── Geofencing Helpers ──
@@ -249,30 +331,32 @@ class MainActivity : FlutterActivity() {
 
     // ── Lock Service Helpers ──
 
-    private fun checkOverlayPermissionAndStart(isExamMode: Boolean = false, allowedApps: Array<String> = emptyArray()) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                startActivityForResult(intent, OVERLAY_PERMISSION_REQ_CODE)
-            } else {
-                startLockService(isExamMode, allowedApps)
-            }
+    private fun checkOverlayPermissionAndStart(isExamMode: Boolean, allowedApps: Array<String>, reason: String? = null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivityForResult(intent, OVERLAY_PERMISSION_REQ_CODE)
         } else {
-            startLockService(isExamMode, allowedApps)
+            startLockService(isExamMode, allowedApps, reason)
         }
     }
 
-    private fun startLockService(isExamMode: Boolean = false, allowedApps: Array<String> = emptyArray()) {
-        val pin = getSharedPreferences("familyguard_prefs", Context.MODE_PRIVATE)
-            .getString("lock_pin", "") ?: ""
-        val intent = Intent(this, LockService::class.java)
-        intent.putExtra("pin", pin)
-        intent.putExtra("isExamMode", isExamMode)
-        intent.putExtra("allowedApps", allowedApps)
-        startService(intent)
+    private fun startLockService(isExamMode: Boolean, allowedApps: Array<String>, reason: String? = null) {
+        val intent = Intent(this, LockService::class.java).apply {
+            action = LockService.ACTION_START_LOCK
+            putExtra("isExamMode", isExamMode)
+            putExtra("allowedApps", allowedApps)
+            if (reason != null) {
+                putExtra("reason", reason)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun stopLockService() {

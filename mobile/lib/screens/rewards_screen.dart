@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/websocket_service.dart';
+import '../theme.dart';
+import 'dart:async';
 
 class RewardsScreen extends StatefulWidget {
   final int profileId;
@@ -18,6 +21,7 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
 
   late AnimationController _avatarController;
   late Animation<double> _scaleAnim;
+  StreamSubscription? _wsSubscription;
 
   @override
   void initState() {
@@ -28,10 +32,17 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
     );
 
     _loadData();
+    
+    _wsSubscription = WebSocketService.instance.messages.listen((msg) {
+      if (msg['type'] == 'gamification_updated' && msg['profile_id'] == widget.profileId) {
+        _loadData();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _wsSubscription?.cancel();
     _avatarController.dispose();
     super.dispose();
   }
@@ -125,12 +136,12 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
     final badges = _summary?['recent_badges'] as List<dynamic>? ?? [];
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: SafeChildColors.background,
       appBar: AppBar(
-        title: const Text('Mes Récompenses', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+        title: const Text('Mes Récompenses', style: TextStyle(fontWeight: FontWeight.bold, color: SafeChildColors.textMain)),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
+        iconTheme: const IconThemeData(color: SafeChildColors.textMain),
       ),
       body: RefreshIndicator(
         onRefresh: _loadData,
@@ -198,7 +209,7 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
                     child: _buildStatCard(
                       'Série',
                       '🔥 $currentStreak jours',
-                      Colors.orange,
+                      SafeChildColors.warning,
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -206,7 +217,7 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
                     child: _buildStatCard(
                       'Record',
                       '🏆 $bestStreak jours',
-                      Colors.blue,
+                      SafeChildColors.primary,
                     ),
                   ),
                 ],
@@ -303,7 +314,7 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
     );
   }
 
-  Widget _buildStatCard(String title, String value, MaterialColor color) {
+  Widget _buildStatCard(String title, String value, Color color) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -315,7 +326,7 @@ class RewardsScreenState extends State<RewardsScreen> with TickerProviderStateMi
         children: [
           Text(title, style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
-          Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color[700])),
+          Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
         ],
       ),
     );

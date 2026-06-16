@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io' show Platform, SocketException;
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -658,6 +658,50 @@ class ApiService {
     }
   }
 
+  // ── Quiz / Mini-Games API ──
+
+  static Future<List<dynamic>> getQuizQuestions(int profileId, {int limit = 5}) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/gamification/$profileId/quiz/questions?limit=$limit'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors du chargement du quiz');
+    }
+  }
+
+  static Future<Map<String, dynamic>> submitQuizAnswer(int profileId, int questionId, int selectedIndex) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/gamification/$profileId/quiz/submit'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'question_id': questionId,
+        'selected_index': selectedIndex,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de la validation de la réponse');
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> getSafeZones(int profileId) async {
     final token = await getToken();
     if (token == null) throw Exception('Non authentifié');
@@ -676,5 +720,218 @@ class ApiService {
       throw Exception('Erreur lors de la récupération des zones de sécurité');
     }
   }
-}
 
+  // ── App Usage & Web Filtering API ──
+
+  static Future<void> sendUsageStats(int profileId, Map<String, int> stats) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/profiles/$profileId/usage-stats'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'stats': stats,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      debugPrint('Erreur lors de l\'envoi des statistiques: ${response.body}');
+    }
+  }
+
+  static Future<void> reportExplicitSearch(int profileId, String text, String word) async {
+    final token = await getToken();
+    if (token == null) return;
+
+    // Send to harassment alert endpoint or a specific explicit search endpoint
+    // For now we reuse the harassment-alert which triggers a push notification
+    try {
+      await http.post(
+        Uri.parse('$baseUrl/profiles/$profileId/harassment-alert'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'app_package': 'Navigation web (Mot bloqué: $word)',
+        }),
+      );
+    } catch (e) {
+      debugPrint('Erreur report explicit: $e');
+    }
+  }
+
+  // ── Web Filtering Rules API ──
+
+  static Future<Map<String, dynamic>> getWebFilters(int profileId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.get(
+      Uri.parse('$baseUrl/profiles/$profileId/rules'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de la récupération des filtres web');
+    }
+  }
+
+  static Future<Map<String, dynamic>> addWebFilterRule(int profileId, String urlPattern, String ruleType) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.post(
+      Uri.parse('$baseUrl/profiles/$profileId/rules'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'url_pattern': urlPattern,
+        'rule_type': ruleType,
+      }),
+    ));
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de l\'ajout de la règle web');
+    }
+  }
+
+  static Future<void> deleteWebFilterRule(int profileId, int ruleId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.delete(
+      Uri.parse('$baseUrl/profiles/$profileId/rules/$ruleId'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode != 200) {
+      throw Exception('Erreur lors de la suppression de la règle web');
+    }
+  }
+
+  static Future<void> toggleStrictMode(int profileId, bool strictMode) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.put(
+      Uri.parse('$baseUrl/profiles/$profileId/strict-mode?strict_mode=$strictMode'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode != 200) {
+      throw Exception('Erreur lors de la modification du mode strict');
+    }
+  }
+
+  // ── Custom Quiz Questions API ──
+
+  static Future<List<dynamic>> getCustomQuizQuestions(int profileId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.get(
+      Uri.parse('$baseUrl/gamification/$profileId/custom-questions'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de la récupération des questions personnalisées');
+    }
+  }
+
+  static Future<Map<String, dynamic>> addCustomQuizQuestion(int profileId, Map<String, dynamic> questionData) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.post(
+      Uri.parse('$baseUrl/gamification/$profileId/custom-questions'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(questionData),
+    ));
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de l\'ajout de la question');
+    }
+  }
+
+  static Future<void> deleteCustomQuizQuestion(int profileId, int questionId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.delete(
+      Uri.parse('$baseUrl/gamification/$profileId/custom-questions/$questionId'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode != 200) {
+      throw Exception('Erreur lors de la suppression de la question');
+    }
+  }
+
+  // ── App Usage & Explicit Search Logs ──
+
+  static Future<List<dynamic>> getAppUsageDetail(int profileId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.get(
+      Uri.parse('$baseUrl/profiles/$profileId/app-usage-detail'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de la récupération des détails d\'utilisation');
+    }
+  }
+
+  static Future<List<dynamic>> getExplicitSearchLogs(int profileId) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Non autorisé');
+
+    final response = await _requestWithRetry(() => http.get(
+      Uri.parse('$baseUrl/profiles/$profileId/explicit-search-logs'),
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    ));
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Erreur lors de la récupération des historiques de recherche');
+    }
+  }
+}

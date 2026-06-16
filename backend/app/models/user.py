@@ -11,6 +11,10 @@ class RuleType(str, enum.Enum):
     EXAM_MODE = "EXAM_MODE"
     APP_BLOCK = "APP_BLOCK"
 
+class FilterRuleType(str, enum.Enum):
+    WHITELIST = "WHITELIST"
+    BLACKLIST = "BLACKLIST"
+
 
 class User(Base):
     """
@@ -49,6 +53,9 @@ class Profile(Base):
     best_streak = Column(Integer, default=0)
     avatar_level = Column(Integer, default=1)
     
+    # Web Filtering
+    strict_web_filter = Column(Boolean, default=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     parent = relationship("User", back_populates="profiles")
@@ -62,6 +69,23 @@ class Profile(Base):
     badges = relationship("Badge", back_populates="profile", cascade="all, delete-orphan")
     rewards = relationship("Reward", back_populates="profile", cascade="all, delete-orphan")
     quests = relationship("Quest", back_populates="profile", cascade="all, delete-orphan")
+    web_filter_rules = relationship("WebFilterRule", back_populates="profile", cascade="all, delete-orphan")
+    quiz_questions = relationship("QuizQuestion", back_populates="profile", cascade="all, delete-orphan")
+    quiz_attempts = relationship("QuizAttempt", back_populates="profile", cascade="all, delete-orphan")
+
+class WebFilterRule(Base):
+    """
+    Règle de filtrage web spécifique à un enfant (Liste blanche ou noire).
+    """
+    __tablename__ = "web_filter_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
+    url_pattern = Column(String, nullable=False)
+    rule_type = Column(SAEnum(FilterRuleType), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    profile = relationship("Profile", back_populates="web_filter_rules")
 
 
 class SafeZone(Base):
@@ -155,6 +179,36 @@ class Quest(Base):
     profile = relationship("Profile", back_populates="quests")
 
 
+class QuizQuestion(Base):
+    """Questions de Quiz (Globales si profile_id=None, ou Personnalisées)"""
+    __tablename__ = "quiz_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True) # Null = global question
+    category = Column(String, nullable=False)
+    question = Column(String, nullable=False)
+    options = Column(JSON, nullable=False) # List of 4 strings
+    correct_index = Column(Integer, nullable=False)
+    points = Column(Integer, nullable=False, default=5)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    profile = relationship("Profile", back_populates="quiz_questions")
+    attempts = relationship("QuizAttempt", back_populates="question", cascade="all, delete-orphan")
+
+class QuizAttempt(Base):
+    """Historique des tentatives de Quiz pour limiter les gains répétitifs."""
+    __tablename__ = "quiz_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
+    question_id = Column(Integer, ForeignKey("quiz_questions.id"), nullable=False)
+    is_correct = Column(Boolean, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    profile = relationship("Profile", back_populates="quiz_attempts")
+    question = relationship("QuizQuestion", back_populates="attempts")
+
+
 class TimeRule(Base):
     """
     Screen time rule for a child profile.
@@ -181,12 +235,13 @@ class TimeRule(Base):
 class AppUsage(Base):
     """
     Daily usage tracking for a child profile.
-    One row per profile per day.
+    One row per profile per day per package.
     """
     __tablename__ = "app_usages"
 
     id = Column(Integer, primary_key=True, index=True)
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
+    package_name = Column(String, nullable=False)
     date = Column(Date, nullable=False)
     minutes_used = Column(Integer, default=0)
 
@@ -199,6 +254,7 @@ class ActivityType(str, enum.Enum):
     TIME_LIMIT_REACHED = "TIME_LIMIT_REACHED"
     GEOFENCE_ALERT = "GEOFENCE_ALERT"
     CYBERBULLYING_DETECTED = "CYBERBULLYING_DETECTED"
+    EXPLICIT_SEARCH = "EXPLICIT_SEARCH"
 
 class ActivityLog(Base):
     """

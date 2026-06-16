@@ -4,7 +4,7 @@ import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchAPI, logout } from "@/lib/api";
-import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2, Globe, Plus } from "lucide-react";
 
 type Profile = {
   id: number;
@@ -17,10 +17,11 @@ type Profile = {
 type TimeRule = {
   id: number;
   profile_id: number;
-  rule_type: "DAILY_LIMIT" | "BEDTIME_BLOCK";
+  rule_type: "DAILY_LIMIT" | "BEDTIME_BLOCK" | "APP_BLOCK";
   max_minutes_per_day: number | null;
   start_time: string | null;
   end_time: string | null;
+  blocked_apps?: string[];
   is_active: boolean;
 };
 
@@ -35,8 +36,12 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
   const unwrappedParams = use(params);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [rules, setRules] = useState<TimeRule[]>([]);
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [weeklyUsage, setWeeklyUsage] = useState<any[]>([]);
+  const [appUsage, setAppUsage] = useState<any[]>([]);
+  const [explicitLogs, setExplicitLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [webRules, setWebRules] = useState<any[]>([]);
+  const [strictWebFilter, setStrictWebFilter] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -73,6 +78,28 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
           setWeeklyUsage(usage);
         } catch (usageErr) {
           console.error("Erreur chargement weekly usage:", usageErr);
+        }
+        
+        try {
+          const appDetails = await fetchAPI(`/profiles/${profileId}/app-usage-detail`);
+          setAppUsage(appDetails);
+        } catch (appErr) {
+          console.error("Erreur chargement app usage:", appErr);
+        }
+
+        try {
+          const searchLogs = await fetchAPI(`/profiles/${profileId}/explicit-search-logs`);
+          setExplicitLogs(searchLogs);
+        } catch (searchErr) {
+          console.error("Erreur chargement search logs:", searchErr);
+        }
+        
+        try {
+          const filterData = await fetchAPI(`/filtering/profiles/${profileId}/rules`);
+          setStrictWebFilter(filterData.strict_mode);
+          setWebRules(filterData.rules || []);
+        } catch (filterErr) {
+          console.error("Erreur chargement web filters:", filterErr);
         }
         
       } catch (err: any) {
@@ -185,6 +212,40 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
     }
   };
 
+  const handleToggleAppBlock = async (packageName: string, isBlocked: boolean) => {
+    setSuccessMsg("");
+    setError("");
+    try {
+      const existingRule = rules.find(r => r.rule_type === "APP_BLOCK");
+      let newBlockedApps = existingRule && existingRule.blocked_apps ? [...existingRule.blocked_apps] : [];
+      
+      if (isBlocked) {
+        if (!newBlockedApps.includes(packageName)) newBlockedApps.push(packageName);
+      } else {
+        newBlockedApps = newBlockedApps.filter(p => p !== packageName);
+      }
+
+      if (existingRule) {
+        await fetchAPI(`/profiles/${profileId}/rules/${existingRule.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ blocked_apps: newBlockedApps, is_active: true }),
+        });
+      } else {
+        await fetchAPI(`/profiles/${profileId}/rules`, {
+          method: "POST",
+          body: JSON.stringify({ rule_type: "APP_BLOCK", blocked_apps: newBlockedApps, is_active: true }),
+        });
+      }
+      
+      const updatedRules = await fetchAPI(`/profiles/${profileId}/rules`);
+      setRules(updatedRules);
+      setSuccessMsg(isBlocked ? "Application bloquée." : "Application débloquée.");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setError(err.message || "Erreur lors de la mise à jour");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-mesh flex items-center justify-center">
@@ -210,8 +271,57 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
     );
   }
 
-  const dailyRule = rules.find(r => r.rule_type === "DAILY_LIMIT");
-  const bedtimeRule = rules.find(r => r.rule_type === "BEDTIME_BLOCK");
+  const handleDeleteWebRule = async (ruleId: number) => {
+    if (!confirm("Supprimer cette règle ?")) return;
+    try {
+      await fetchAPI(`/filtering/profiles/${profileId}/rules/${ruleId}`, { method: "DELETE" });
+      setWebRules(webRules.filter(r => r.id !== ruleId));
+      setSuccessMsg("Règle supprimée.");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setError(err.message || "Erreur de suppression");
+    }
+  };
+
+  const handleAddWebRule = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setSuccessMsg("");
+    setError("");
+    const formData = new FormData(e.currentTarget);
+    const domain = formData.get("domain") as string;
+    
+    if (!domain) return;
+
+    try {
+      const newRule = await fetchAPI(`/filtering/profiles/${profileId}/rules`, {
+        method: "POST",
+        body: JSON.stringify({ url_pattern: domain, rule_type: "BLACKLIST" }),
+      });
+      setWebRules([...webRules, newRule]);
+      setSuccessMsg("Domaine bloqué avec succès.");
+      (e.target as HTMLFormElement).reset();
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setError(err.message || "Erreur lors de l'ajout");
+    }
+  };
+
+  const handleToggleStrictMode = async () => {
+    try {
+      const newMode = !strictWebFilter;
+      await fetchAPI(`/filtering/profiles/${profileId}/strict-mode?strict_mode=${newMode}`, { method: "PUT" });
+      setStrictWebFilter(newMode);
+      setSuccessMsg(newMode ? "Filtrage strict activé." : "Filtrage strict désactivé.");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setError(err.message || "Erreur");
+    }
+  };
+
+  const dailyRule = rules.find((r) => r.rule_type === "DAILY_LIMIT");
+  const bedtimeRule = rules.find((r) => r.rule_type === "BEDTIME_BLOCK");
+  const appBlockRule = rules.find(r => r.rule_type === "APP_BLOCK");
+  const blockedApps = appBlockRule?.blocked_apps || [];
 
   return (
     <div className="min-h-screen bg-mesh pb-20">
@@ -229,6 +339,10 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
             </h1>
           </div>
           <div className="flex items-center gap-4">
+            <Link href={`/dashboard/${profileId}/gamification`} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all">
+              <span className="text-xl">🎮</span>
+              <span className="hidden sm:inline">Gamification</span>
+            </Link>
             <Link href="/dashboard/logs" className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all">
               <Activity className="w-4 h-4" />
               <span className="hidden sm:inline">Historique</span>
@@ -409,6 +523,124 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
                 </div>
               </form>
             </div>
+
+            {/* Web Filtering Card */}
+            <div className="glass bg-white/80 p-6 rounded-2xl shadow-sm border border-white/50 transition-all hover:shadow-md mt-6">
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600">
+                    <Globe className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-lg font-bold text-gray-900">Filtrage Web</h4>
+                    <p className="text-sm text-text-muted mt-1">Gérez l'accès aux sites web pour ce profil.</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100 mb-6 flex justify-between items-center">
+                <div>
+                  <h5 className="font-bold text-gray-900">Blocage Strict Automatique</h5>
+                  <p className="text-xs text-gray-500">Bloque automatiquement les sites pour adultes, jeux d'argent et contenus violents.</p>
+                </div>
+                <button 
+                  onClick={handleToggleStrictMode}
+                  className={`flex-shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${strictWebFilter ? 'bg-success' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${strictWebFilter ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+
+              <div className="mt-4">
+                <h5 className="font-bold text-gray-900 mb-2">Liste Noire Personnalisée</h5>
+                <form onSubmit={handleAddWebRule} className="flex gap-2 mb-4">
+                  <input 
+                    name="domain"
+                    placeholder="ex: facebook.com"
+                    className="flex-1 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+                    required
+                  />
+                  <button type="submit" className="bg-gray-900 hover:bg-black text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Bloquer
+                  </button>
+                </form>
+
+                <div className="space-y-2">
+                  {webRules.length === 0 ? (
+                    <p className="text-sm text-gray-500 italic">Aucun domaine bloqué manuellement.</p>
+                  ) : (
+                    webRules.filter(r => r.rule_type === "BLACKLIST").map(rule => (
+                      <div key={rule.id} className="flex justify-between items-center bg-white border border-gray-100 p-3 rounded-lg">
+                        <span className="text-sm font-medium text-gray-900">{rule.url_pattern}</span>
+                        <button onClick={() => handleDeleteWebRule(rule.id)} className="text-gray-400 hover:text-danger">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* App Usage Details */}
+            {appUsage.length > 0 && (
+              <div className="glass bg-white/80 p-6 rounded-2xl shadow-sm border border-white/50 transition-all hover:shadow-md mt-6">
+                <h4 className="text-lg font-bold text-gray-900 mb-4">Utilisation détaillée par application (Aujourd'hui)</h4>
+                <div className="space-y-4">
+                  {appUsage.map((app, idx) => {
+                    const maxMins = Math.max(...appUsage.map(a => a.minutes_today), 60);
+                    const percent = Math.min(100, (app.minutes_today / maxMins) * 100);
+                    const isBlocked = blockedApps.includes(app.package_name);
+
+                    return (
+                      <div key={idx} className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center text-xl">
+                          {app.icon}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex justify-between mb-1">
+                            <div>
+                              <span className="font-semibold text-sm text-gray-900">{app.app_name}</span>
+                            </div>
+                            <span className="font-bold text-sm text-primary">{Math.floor(app.minutes_today / 60)}h {(app.minutes_today % 60).toString().padStart(2, '0')}m</span>
+                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-2">
+                            <div className={`h-2 rounded-full ${isBlocked ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${percent}%` }}></div>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => handleToggleAppBlock(app.package_name, !isBlocked)}
+                          className={`flex-shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isBlocked ? 'bg-danger' : 'bg-success'}`}
+                          title={isBlocked ? "Débloquer l'application" : "Bloquer l'application"}
+                        >
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isBlocked ? 'translate-x-1' : 'translate-x-6'}`} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            
+            {/* Explicit Search Logs */}
+            {explicitLogs.length > 0 && (
+              <div className="glass bg-white/80 p-6 rounded-2xl shadow-sm border border-white/50 transition-all hover:shadow-md mt-6 border-red-100">
+                <h4 className="text-lg font-bold text-danger mb-4 flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5" /> Recherches explicites bloquées
+                </h4>
+                <div className="space-y-3">
+                  {explicitLogs.map((log, idx) => (
+                    <div key={idx} className="bg-red-50 p-3 rounded-lg border border-red-100 flex justify-between items-center">
+                      <span className="text-sm font-semibold text-red-900">{log.description}</span>
+                      <span className="text-xs text-red-700 font-medium">
+                        {new Date(log.created_at).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute:'2-digit' })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
           </div>
 
           {/* Sidebar / Activity Feed */}

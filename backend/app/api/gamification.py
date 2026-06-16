@@ -7,7 +7,10 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.deps import get_current_user
-from app.models.user import User, Profile, PointTransaction, Badge, Reward, BadgeType, Quest, QuestStatus
+from app.models.user import User, Profile, PointTransaction, Badge, Reward, BadgeType, Quest, QuestStatus, QuizQuestion, QuizAttempt
+from app.api.ws import manager
+from app.core.firebase import send_push_notification
+import random
 
 router = APIRouter()
 
@@ -62,6 +65,25 @@ class GamificationSummarySchema(BaseModel):
     recent_badges: List[BadgeSchema]
 
 
+class QuizQuestionSchema(BaseModel):
+    id: int
+    category: str
+    question: str
+    options: List[str]
+    points: int
+
+class QuizSubmitSchema(BaseModel):
+    question_id: int
+    selected_index: int
+
+
+class QuizCreateSchema(BaseModel):
+    category: str
+    question: str
+    options: List[str]
+    correct_index: int
+    points: int = 5
+
 class RewardCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -110,7 +132,7 @@ def award_badge(db: Session, profile: Profile, badge_type: BadgeType, name: str,
 
 # ── Endpoints ──
 
-@router.get("/{profile_id}", response_model=GamificationSummarySchema)
+@router.get("/{profile_id}/gamification", response_model=GamificationSummarySchema)
 def get_gamification_summary(
     profile_id: int, 
     db: Session = Depends(get_db), 
@@ -167,7 +189,7 @@ def list_rewards(
 
 
 @router.post("/{profile_id}/rewards/{reward_id}/claim")
-def claim_reward(
+async def claim_reward(
     profile_id: int,
     reward_id: int,
     db: Session = Depends(get_db),
@@ -192,10 +214,22 @@ def claim_reward(
     
     add_points(db, profile, -reward.point_cost, f"Achat récompense : {reward.title}")
     
-    # Note: the bonus minutes should technically be applied to today's rule limits,
-    # or added to a 'bonus_pool' in Profile. For now, it's claimed successfully.
-    
     db.commit()
+    
+    await manager.broadcast_to_parent(profile.parent_id, {
+        "type": "gamification_updated",
+        "profile_id": profile.id,
+        "action": "reward_claimed"
+    })
+    
+    parent = db.query(User).filter(User.id == profile.parent_id).first()
+    if parent and parent.fcm_token:
+        send_push_notification(
+            token=parent.fcm_token,
+            title="Récompense réclamée",
+            body=f"{profile.name} vient de réclamer la récompense '{reward.title}' !"
+        )
+
     return {"status": "success", "message": "Récompense réclamée avec succès !"}
 
 @router.get("/{profile_id}/points-history", response_model=List[PointTransactionSchema])
@@ -244,7 +278,7 @@ def update_streak(
 
 
 @router.post("/{profile_id}/disconnect-early")
-def disconnect_early(
+async def disconnect_early(
     profile_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -256,7 +290,7 @@ def disconnect_early(
     """
     profile = next((p for p in current_user.profiles if p.id == profile_id), None)
     if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="Profil introuvable")
 
     if profile.is_locked:
         raise HTTPException(status_code=400, detail="Appareil déjà verrouillé")
@@ -293,6 +327,13 @@ def disconnect_early(
     # Lock the profile to validate the disconnection
     profile.is_locked = True
     db.commit()
+
+    # Broadcast to update parent UI and child device state
+    await manager.broadcast_to_parent(current_user.id, {
+        "type": "rules_updated",
+        "profile_id": profile.id,
+        "action": "disconnect_early"
+    })
 
     return {
         "status": "success", 
@@ -339,7 +380,7 @@ def create_quest(
 
 
 @router.put("/quests/{quest_id}/complete")
-def complete_quest(
+async def complete_quest(
     quest_id: int,
     db: Session = Depends(get_db),
 ):
@@ -352,11 +393,29 @@ def complete_quest(
 
     quest.status = QuestStatus.COMPLETED_BY_CHILD
     db.commit()
+    
+    # Broadcast to parent
+    profile = db.query(Profile).filter(Profile.id == quest.profile_id).first()
+    if profile:
+        await manager.broadcast_to_parent(profile.parent_id, {
+            "type": "gamification_updated",
+            "profile_id": profile.id,
+            "action": "quest_completed"
+        })
+        
+        parent = db.query(User).filter(User.id == profile.parent_id).first()
+        if parent and parent.fcm_token:
+            send_push_notification(
+                token=parent.fcm_token,
+                title="Quête terminée !",
+                body=f"{profile.name} a terminé la quête '{quest.title}'. En attente de validation."
+            )
+            
     return {"message": "Quête marquée comme terminée, en attente du parent."}
 
 
 @router.put("/quests/{quest_id}/validate")
-def validate_quest(
+async def validate_quest(
     quest_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -383,4 +442,207 @@ def validate_quest(
     db.add(tx)
     db.commit()
 
+    # Broadcast to child & parent
+    await manager.broadcast_to_parent(current_user.id, {
+        "type": "gamification_updated",
+        "profile_id": quest.profile_id,
+        "action": "quest_validated",
+        "points_earned": quest.points_reward
+    })
+
     return {"message": f"Quête validée, +{quest.points_reward} points accordés !"}
+
+# ──────────────────────────────────────────────────────────
+# MINI-GAMES / QUIZ
+# ──────────────────────────────────────────────────────────
+
+@router.get("/{profile_id}/quiz/questions", response_model=List[QuizQuestionSchema])
+def get_quiz_questions(
+    profile_id: int,
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile: raise HTTPException(status_code=404, detail="Profil introuvable")
+
+    # Obtenir la date d'aujourd'hui pour filtrer les questions déjà réussies aujourd'hui
+    today = datetime.now().date()
+
+    # Trouver les IDs des questions réussies aujourd'hui
+    successful_attempts = db.query(QuizAttempt.question_id).filter(
+        QuizAttempt.profile_id == profile_id,
+        QuizAttempt.is_correct == True,
+        func.date(QuizAttempt.created_at) == today
+    ).all()
+    successful_question_ids = [attempt[0] for attempt in successful_attempts]
+
+    # Obtenir les questions disponibles (globales + personnalisées pour ce profil)
+    query = db.query(QuizQuestion).filter(
+        (QuizQuestion.profile_id == None) | (QuizQuestion.profile_id == profile_id)
+    )
+    if successful_question_ids:
+        query = query.filter(~QuizQuestion.id.in_(successful_question_ids))
+
+    available_questions = query.all()
+
+    # Select random questions
+    selected_questions = random.sample(available_questions, min(limit, len(available_questions)))
+    
+    # We return the question WITHOUT the correct_index
+    questions_out = []
+    for q in selected_questions:
+        questions_out.append({
+            "id": q.id,
+            "category": q.category,
+            "question": q.question,
+            "options": q.options,
+            "points": q.points
+        })
+        
+    return questions_out
+
+@router.post("/{profile_id}/quiz/submit")
+async def submit_quiz_answer(
+    profile_id: int,
+    submit_data: QuizSubmitSchema,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile: raise HTTPException(status_code=404, detail="Profil introuvable")
+
+    # Find the question
+    question = db.query(QuizQuestion).filter(
+        QuizQuestion.id == submit_data.question_id,
+        (QuizQuestion.profile_id == None) | (QuizQuestion.profile_id == profile_id)
+    ).first()
+    
+    if not question:
+        raise HTTPException(status_code=404, detail="Question introuvable")
+
+    # Vérifier si l'enfant a déjà gagné les points pour cette question aujourd'hui
+    today = datetime.now().date()
+    already_succeeded = db.query(QuizAttempt).filter(
+        QuizAttempt.profile_id == profile_id,
+        QuizAttempt.question_id == question.id,
+        QuizAttempt.is_correct == True,
+        func.date(QuizAttempt.created_at) == today
+    ).first()
+
+    is_correct = (question.correct_index == submit_data.selected_index)
+    
+    # Enregistrer la tentative
+    attempt = QuizAttempt(
+        profile_id=profile_id,
+        question_id=question.id,
+        is_correct=is_correct
+    )
+    db.add(attempt)
+    db.commit()
+
+    if is_correct:
+        if already_succeeded:
+            # Ne pas redonner de points, juste dire que c'est juste
+            return {
+                "status": "success",
+                "is_correct": True,
+                "points_earned": 0,
+                "correct_index": question.correct_index,
+                "message": "Bonne réponse ! (Points déjà gagnés pour cette question aujourd'hui)"
+            }
+
+        # Give points
+        add_points(db, profile, question.points, f"Bonne réponse au Quiz ({question.category})")
+        
+        await manager.broadcast_to_parent(profile.parent_id, {
+            "type": "gamification_updated",
+            "profile_id": profile.id,
+            "action": "quiz_correct",
+            "points_earned": question.points
+        })
+        
+        parent = db.query(User).filter(User.id == profile.parent_id).first()
+        if parent and parent.fcm_token:
+            send_push_notification(
+                token=parent.fcm_token,
+                title="Quiz réussi !",
+                body=f"{profile.name} a répondu correctement au quiz ({question.category}) et gagne {question.points} pts !"
+            )
+            
+        return {
+            "status": "success",
+            "is_correct": True,
+            "points_earned": question.points,
+            "correct_index": question.correct_index,
+            "message": "Bonne réponse !"
+        }
+    else:
+        return {
+            "status": "success",
+            "is_correct": False,
+            "points_earned": 0,
+            "correct_index": question.correct_index,
+            "message": "Mauvaise réponse."
+        }
+
+# --- Parent Custom Questions Management ---
+
+class QuizQuestionFullSchema(BaseModel):
+    id: int
+    category: str
+    question: str
+    options: List[str]
+    correct_index: int
+    points: int
+    class Config: from_attributes = True
+
+@router.get("/{profile_id}/custom-questions", response_model=List[QuizQuestionFullSchema])
+def get_custom_questions(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    profile = _get_profile_for_parent(profile_id, db, current_user)
+    return db.query(QuizQuestion).filter(QuizQuestion.profile_id == profile.id).all()
+
+@router.post("/{profile_id}/custom-questions", response_model=QuizQuestionFullSchema)
+def add_custom_question(
+    profile_id: int,
+    question_in: QuizCreateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    profile = _get_profile_for_parent(profile_id, db, current_user)
+    if len(question_in.options) != 4:
+        raise HTTPException(status_code=400, detail="Il doit y avoir exactement 4 options")
+    if question_in.correct_index < 0 or question_in.correct_index > 3:
+        raise HTTPException(status_code=400, detail="L'index correct doit être entre 0 et 3")
+
+    new_question = QuizQuestion(
+        profile_id=profile.id,
+        category=question_in.category,
+        question=question_in.question,
+        options=question_in.options,
+        correct_index=question_in.correct_index,
+        points=question_in.points
+    )
+    db.add(new_question)
+    db.commit()
+    db.refresh(new_question)
+    return new_question
+
+@router.delete("/{profile_id}/custom-questions/{question_id}")
+def delete_custom_question(
+    profile_id: int,
+    question_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    profile = _get_profile_for_parent(profile_id, db, current_user)
+    question = db.query(QuizQuestion).filter(QuizQuestion.id == question_id, QuizQuestion.profile_id == profile.id).first()
+    if not question:
+        raise HTTPException(status_code=404, detail="Question introuvable")
+
+    db.delete(question)
+    db.commit()
+    return {"message": "Question supprimée avec succès"}
+
