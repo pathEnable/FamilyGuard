@@ -309,7 +309,10 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
   const handleToggleStrictMode = async () => {
     try {
       const newMode = !strictWebFilter;
-      await fetchAPI(`/filtering/profiles/${profileId}/strict-mode?strict_mode=${newMode}`, { method: "PUT" });
+      await fetchAPI(`/filtering/profiles/${profileId}/strict-mode`, {
+        method: "PUT",
+        body: JSON.stringify({ strict_mode: newMode }),
+      });
       setStrictWebFilter(newMode);
       setSuccessMsg(newMode ? "Filtrage strict activé." : "Filtrage strict désactivé.");
       setTimeout(() => setSuccessMsg(""), 3000);

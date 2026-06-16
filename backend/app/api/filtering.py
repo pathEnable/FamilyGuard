@@ -178,12 +178,13 @@ async def delete_web_filter_rule(
     await manager.broadcast_rules_updated(current_user.id, profile.id)
     return {"status": "success"}
 
-from fastapi import Body
+class StrictModeUpdate(BaseModel):
+    strict_mode: bool
 
 @router.put("/profiles/{profile_id}/strict-mode")
 async def toggle_strict_mode(
     profile_id: int,
-    strict_mode: bool = Body(..., embed=True),
+    request: StrictModeUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -198,11 +199,11 @@ async def toggle_strict_mode(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
         
-    profile.strict_web_filter = strict_mode
+    profile.strict_web_filter = request.strict_mode
     db.commit()
     
     await manager.broadcast_rules_updated(current_user.id, profile.id)
-    return {"status": "success", "strict_mode": strict_mode}
+    return {"status": "success", "strict_mode": request.strict_mode}
 
 # The old POST /check endpoint can still be kept for testing/debugging
 class URLCheckRequest(BaseModel):
