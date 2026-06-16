@@ -14,23 +14,30 @@ Base.metadata.create_all(bind=engine)
 
 # Auto-migrate missing columns
 from sqlalchemy import text
+
+# Migration 1: strict_web_filter
 try:
     with engine.begin() as conn:
         try:
             conn.execute(text('ALTER TABLE profiles ADD COLUMN strict_web_filter BOOLEAN DEFAULT FALSE;'))
-            import add_strict_web_filter_column
-            add_strict_web_filter_column.add_strict_web_filter_column()
-            
-            # Migration 2: Add app_name column to app_usages table
-            import add_app_name_column
-            add_app_name_column.add_app_name_column()
-            
-            print("Checked/ran DB migrations on startup.")
+            print("Added strict_web_filter to profiles")
         except Exception:
             pass
-except Exception as e:
+except Exception:
     pass
 
+# Migration 2: app_name
+try:
+    with engine.begin() as conn:
+        try:
+            conn.execute(text('ALTER TABLE app_usages ADD COLUMN app_name VARCHAR;'))
+            print("Added app_name to app_usages")
+        except Exception:
+            pass
+except Exception:
+    pass
+
+# Migration 3: package_name
 try:
     with engine.begin() as conn:
         try:
@@ -38,7 +45,7 @@ try:
             print("Added package_name to app_usages")
         except Exception:
             pass
-except Exception as e:
+except Exception:
     pass
 
 # Initialize Firebase Admin
