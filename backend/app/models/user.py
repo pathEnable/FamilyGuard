@@ -242,6 +242,7 @@ class AppUsage(Base):
     id = Column(Integer, primary_key=True, index=True)
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=False)
     package_name = Column(String, nullable=False)
+    app_name = Column(String, nullable=True)
     date = Column(Date, nullable=False)
     minutes_used = Column(Integer, default=0)
 

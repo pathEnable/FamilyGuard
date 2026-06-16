@@ -360,8 +360,11 @@ def trigger_harassment_alert(
 
 from typing import Dict
 
+from typing import Dict, Optional
+
 class UsageStatsPayload(BaseModel):
     stats: Dict[str, int]  # package_name -> minutes_used
+    app_names: Optional[Dict[str, str]] = None  # package_name -> app_name
 
 @router.post("/{profile_id}/usage-stats")
 async def update_usage_stats(
@@ -372,8 +375,11 @@ async def update_usage_stats(
     """Called periodically by the child app to sync app usage."""
     today = date.today()
     
-    # We just overwrite today's stats for each package sent by the device
     for package_name, minutes in payload.stats.items():
+        app_name = None
+        if payload.app_names and package_name in payload.app_names:
+            app_name = payload.app_names[package_name]
+
         existing = db.query(AppUsage).filter(
             AppUsage.profile_id == profile_id,
             AppUsage.package_name == package_name,
@@ -382,10 +388,13 @@ async def update_usage_stats(
         
         if existing:
             existing.minutes_used = minutes
+            if app_name:
+                existing.app_name = app_name
         else:
             new_stat = AppUsage(
                 profile_id=profile_id,
                 package_name=package_name,
+                app_name=app_name,
                 date=today,
                 minutes_used=minutes
             )
@@ -429,9 +438,15 @@ def get_app_usage_detail(
     result = []
     for u in usages:
         info = get_app_info(u.package_name)
+        
+        # Override the app name with the one from the device if it's unknown in our registry
+        final_app_name = info["name"]
+        if info["category"] == "Autre" and u.app_name:
+            final_app_name = u.app_name
+            
         result.append({
             "package_name": u.package_name,
-            "app_name": info["name"],
+            "app_name": final_app_name,
             "category": info["category"],
             "icon": info["icon"],
             "minutes_today": u.minutes_used

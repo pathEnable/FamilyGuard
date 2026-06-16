@@ -18,7 +18,14 @@ try:
     with engine.begin() as conn:
         try:
             conn.execute(text('ALTER TABLE profiles ADD COLUMN strict_web_filter BOOLEAN DEFAULT FALSE;'))
-            print("Added strict_web_filter to profiles")
+            import add_strict_web_filter_column
+            add_strict_web_filter_column.add_strict_web_filter_column()
+            
+            # Migration 2: Add app_name column to app_usages table
+            import add_app_name_column
+            add_app_name_column.add_app_name_column()
+            
+            logger.info("Checked/ran DB migrations on startup.")
         except Exception:
             pass
 except Exception as e:
