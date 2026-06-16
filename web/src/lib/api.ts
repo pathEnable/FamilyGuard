@@ -18,7 +18,9 @@ export async function fetchAPI(endpoint: string, options: RequestInit = {}) {
     let errorMessage = "Erreur lors de la requête";
     try {
       const errorData = await response.json();
-      errorMessage = errorData.detail || errorMessage;
+      if (errorData.detail) {
+        errorMessage = typeof errorData.detail === 'string' ? errorData.detail : JSON.stringify(errorData.detail);
+      }
     } catch {
       // Ignorer si pas de JSON
     }
