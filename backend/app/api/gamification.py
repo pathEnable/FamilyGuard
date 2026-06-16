@@ -130,6 +130,16 @@ def award_badge(db: Session, profile: Profile, badge_type: BadgeType, name: str,
         add_points(db, profile, points, f"Badge débloqué : {name}")
 
 
+# ── Helper ──
+
+def _get_profile_for_parent(profile_id: int, db: Session, current_user: User) -> Profile:
+    """Retrieve a profile that belongs to the current user, or raise 404."""
+    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
 # ── Endpoints ──
 
 @router.get("/{profile_id}/gamification", response_model=GamificationSummarySchema)
