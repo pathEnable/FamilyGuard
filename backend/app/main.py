@@ -10,6 +10,21 @@ from app.services.scheduler import start_scheduler, stop_scheduler
 # Initialize DB models
 Base.metadata.create_all(bind=engine)
 
+# Auto-migrate missing columns
+from sqlalchemy import text
+try:
+    with engine.begin() as conn:
+        try:
+            conn.execute(text('ALTER TABLE profiles ADD COLUMN strict_web_filter BOOLEAN DEFAULT FALSE;'))
+        except Exception:
+            pass
+        try:
+            conn.execute(text('ALTER TABLE app_usages ADD COLUMN package_name VARCHAR NOT NULL DEFAULT \'unknown\';'))
+        except Exception:
+            pass
+except Exception as e:
+    print(f"Migration error: {e}")
+
 # Initialize Firebase Admin
 firebase.init_firebase()
 
