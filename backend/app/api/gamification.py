@@ -145,10 +145,10 @@ def get_gamification_summary(
     badges = db.query(Badge).filter(Badge.profile_id == profile_id).order_by(Badge.unlocked_at.desc()).limit(3).all()
     
     return {
-        "total_points": profile.total_points,
-        "current_streak": profile.current_streak,
-        "best_streak": profile.best_streak,
-        "avatar_level": profile.avatar_level,
+        "total_points": profile.total_points or 0,
+        "current_streak": profile.current_streak or 0,
+        "best_streak": profile.best_streak or 0,
+        "avatar_level": profile.avatar_level or 1,
         "recent_badges": badges
     }
 

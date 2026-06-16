@@ -59,7 +59,7 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
     const loadData = async () => {
       try {
         const profiles: Profile[] = await fetchAPI("/profiles/");
-        const currentProfile = profiles.find((p) => p.id === profileId);
+        const currentProfile = profiles.find((p) => p.id === parseInt(profileId));
         if (currentProfile) {
           setProfile(currentProfile);
         }

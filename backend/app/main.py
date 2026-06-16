@@ -48,6 +48,34 @@ try:
 except Exception:
     pass
 
+# Migration 4: Gamification columns on profiles
+for col_name, col_default in [
+    ('total_points', '0'),
+    ('current_streak', '0'),
+    ('best_streak', '0'),
+    ('avatar_level', '1'),
+]:
+    try:
+        with engine.begin() as conn:
+            try:
+                conn.execute(text(f'ALTER TABLE profiles ADD COLUMN {col_name} INTEGER DEFAULT {col_default};'))
+                print(f"Added {col_name} to profiles")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+# Migration 5: Fix NULL gamification values on existing profiles
+try:
+    with engine.begin() as conn:
+        conn.execute(text('UPDATE profiles SET total_points = 0 WHERE total_points IS NULL;'))
+        conn.execute(text('UPDATE profiles SET current_streak = 0 WHERE current_streak IS NULL;'))
+        conn.execute(text('UPDATE profiles SET best_streak = 0 WHERE best_streak IS NULL;'))
+        conn.execute(text('UPDATE profiles SET avatar_level = 1 WHERE avatar_level IS NULL;'))
+        print("Fixed NULL gamification values")
+except Exception:
+    pass
+
 # Initialize Firebase Admin
 firebase.init_firebase()
 
