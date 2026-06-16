@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core import firebase
-from app.api import filtering, auth, profiles, time_rules, sos, ws, gamification, safe_zones, location, reports, apps
+from app.api import filtering, auth, profiles, time_rules, sos, ws, gamification, safe_zones, location, reports
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 # Initialize DB models
@@ -46,7 +46,7 @@ app.include_router(gamification.router, prefix=f"{settings.API_V1_STR}/profiles"
 app.include_router(safe_zones.router, prefix=f"{settings.API_V1_STR}/safe-zones", tags=["Safe Zones"])
 app.include_router(location.router, prefix=f"{settings.API_V1_STR}/profiles", tags=["Location"])
 app.include_router(reports.router, prefix=f"{settings.API_V1_STR}/reports", tags=["Reports"])
-app.include_router(apps.router, prefix=f"{settings.API_V1_STR}/profiles", tags=["Apps"])
+
 app.include_router(ws.router, prefix=f"{settings.API_V1_STR}/ws", tags=["WebSockets"])
 
 @app.get("/")
