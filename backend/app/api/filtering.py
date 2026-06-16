@@ -24,7 +24,7 @@ class WebFilterRuleResponse(BaseModel):
     # To fix string serialization safely in Pydantic v1 and v2, we can just use Config
     
     class Config:
-        orm_mode = True
+        from_attributes = True
         use_enum_values = True
 
 class WebFilterSettingsResponse(BaseModel):
