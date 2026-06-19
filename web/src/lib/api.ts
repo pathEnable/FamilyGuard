@@ -61,6 +61,29 @@ export async function login(username: string, password: string) {
   return data;
 }
 
+export async function register(email: string, password: string) {
+  const response = await fetch(`${API_URL}/auth/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Erreur lors de l'inscription";
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.detail || errorMessage;
+    } catch {
+      // Ignore
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
 export function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("token");

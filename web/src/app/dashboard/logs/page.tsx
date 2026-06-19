@@ -20,50 +20,49 @@ type Profile = {
   name: string;
 };
 
+import useSWR from "swr";
+
 export default function GlobalLogsPage() {
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  
   // Filters
   const [selectedProfileId, setSelectedProfileId] = useState<string>("all");
   const [selectedType, setSelectedType] = useState<string>("all");
 
   // Pagination
   const [page, setPage] = useState(1);
-  const [totalItems, setTotalItems] = useState(0);
   const limit = 50;
 
   const router = useRouter();
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setLoading(true);
-        const skip = (page - 1) * limit;
-        // Fetch logs and profiles concurrently
-        const [logsResponse, profilesData] = await Promise.all([
-          fetchAPI(`/profiles/logs/all?skip=${skip}&limit=${limit}`),
-          fetchAPI("/profiles/")
-        ]);
-        
-        setLogs(logsResponse.items || []);
-        setTotalItems(logsResponse.total || 0);
-        setProfiles(profilesData.map((p: any) => ({ id: p.id, name: p.name })));
-      } catch (err: any) {
-        if (err.message.includes("Non autorisé") || err.message.includes("credentials")) {
-          logout();
-          router.push("/login");
-        } else {
-          setError("Impossible de charger l'historique.");
-        }
-      } finally {
-        setLoading(false);
+  const fetcher = async (url: string) => {
+    try {
+      return await fetchAPI(url);
+    } catch (err: any) {
+      if (err.message.includes("Non autorisé") || err.message.includes("credentials")) {
+        logout();
+        router.push("/login");
       }
-    };
-    loadData();
-  }, [router, page]);
+      throw err;
+    }
+  };
+
+  const skip = (page - 1) * limit;
+  const { data: logsResponse, error: logsError, isLoading: loadingLogs } = useSWR(
+    `/profiles/logs/all?skip=${skip}&limit=${limit}`,
+    fetcher,
+    { keepPreviousData: true }
+  );
+
+  const { data: profilesData = [], error: profilesError, isLoading: loadingProfiles } = useSWR(
+    "/profiles/",
+    fetcher
+  );
+
+  const logs: ActivityLog[] = logsResponse?.items || [];
+  const totalItems = logsResponse?.total || 0;
+  const profiles = profilesData.map((p: any) => ({ id: p.id, name: p.name }));
+  
+  const loading = loadingLogs || loadingProfiles;
+  const error = (logsError || profilesError) ? "Impossible de charger l'historique." : "";
 
   // Filtering logic
   const filteredLogs = logs.filter(log => {
@@ -113,7 +112,7 @@ export default function GlobalLogsPage() {
                 className="bg-white border border-gray-200 text-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none"
               >
                 <option value="all">Tous les enfants</option>
-                {profiles.map(p => (
+                {profiles.map((p: Profile) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
@@ -145,7 +144,7 @@ export default function GlobalLogsPage() {
         ) : (
           <div className="glass bg-white/80 p-6 rounded-2xl shadow-sm border border-white/50">
             <div className="relative border-l-2 border-gray-100 ml-4 md:ml-6 space-y-8 py-4">
-              {filteredLogs.map((log) => {
+              {filteredLogs.map((log: ActivityLog) => {
                 const isSOS = log.activity_type === 'SOS_TRIGGERED';
                 const isBlocked = log.activity_type === 'WEB_BLOCKED';
                 const isTime = log.activity_type === 'TIME_LIMIT_REACHED';

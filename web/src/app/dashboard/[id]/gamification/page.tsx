@@ -41,55 +41,40 @@ interface CustomQuestion {
   points: number;
 }
 
+import useSWR from "swr";
+
 export default function GamificationPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = use(params);
   const profileId = unwrappedParams.id;
   
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [summary, setSummary] = useState<GamificationSummary | null>(null);
-  const [rewards, setRewards] = useState<Reward[]>([]);
-  const [questions, setQuestions] = useState<CustomQuestion[]>([]);
-  
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [actionError, setActionError] = useState("");
   const router = useRouter();
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const profiles: Profile[] = await fetchAPI("/profiles/");
-        const currentProfile = profiles.find((p) => p.id === parseInt(profileId));
-        if (currentProfile) {
-          setProfile(currentProfile);
-        }
-
-        const sum = await fetchAPI(`/profiles/${profileId}/gamification`);
-        setSummary(sum);
-
-        const rwds = await fetchAPI(`/profiles/${profileId}/rewards`);
-        setRewards(rwds);
-
-        const qs = await fetchAPI(`/profiles/${profileId}/custom-questions`);
-        setQuestions(qs);
-        
-      } catch (err: any) {
-        if (err.message.includes("Non autorisé") || err.message.includes("credentials")) {
-          router.push("/login");
-        } else {
-          setError(err.message || "Erreur de chargement");
-        }
-      } finally {
-        setLoading(false);
+  const fetcher = async (url: string) => {
+    try {
+      return await fetchAPI(url);
+    } catch (err: any) {
+      if (err.message.includes("Non autorisé") || err.message.includes("credentials")) {
+        router.push("/login");
       }
-    };
-    loadData();
-  }, [profileId, router]);
+      throw err;
+    }
+  };
+
+  const { data: profilesData = [], error: profilesError } = useSWR("/profiles/", fetcher);
+  const { data: summary, error: summaryError } = useSWR(`/profiles/${profileId}/gamification`, fetcher);
+  const { data: rewards = [], error: rewardsError, mutate: mutateRewards } = useSWR(`/profiles/${profileId}/rewards`, fetcher);
+  const { data: questions = [], error: questionsError, mutate: mutateQuestions } = useSWR(`/profiles/${profileId}/custom-questions`, fetcher);
+
+  const profile = profilesData.find((p: Profile) => p.id === parseInt(profileId));
+  const loading = !profilesData.length || !summary;
+  const error = (profilesError || summaryError || rewardsError || questionsError) ? "Erreur de chargement" : actionError;
 
   const handleAddQuestion = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setSuccessMsg("");
-    setError("");
+    setActionError("");
     const formData = new FormData(e.currentTarget);
     
     const options = [
@@ -112,32 +97,36 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
         method: "POST",
         body: JSON.stringify(body),
       });
-      const qs = await fetchAPI(`/profiles/${profileId}/custom-questions`);
-      setQuestions(qs);
+      mutateQuestions();
       setSuccessMsg("Question ajoutée avec succès !");
       (e.target as HTMLFormElement).reset();
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err: any) {
-      setError(err.message || "Erreur lors de l'ajout");
+      setActionError(err.message || "Erreur lors de l'ajout");
     }
   };
 
   const deleteQuestion = async (id: number) => {
     if (!confirm("Supprimer cette question ?")) return;
+    
+    // Optimistic delete
+    mutateQuestions(questions.filter((q: CustomQuestion) => q.id !== id), false);
+    
     try {
       await fetchAPI(`/profiles/${profileId}/custom-questions/${id}`, { method: "DELETE" });
-      setQuestions(questions.filter(q => q.id !== id));
+      mutateQuestions();
       setSuccessMsg("Question supprimée.");
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err: any) {
-      setError(err.message || "Erreur");
+      setActionError(err.message || "Erreur");
+      mutateQuestions(); // Revert
     }
   };
 
   const handleAddReward = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setSuccessMsg("");
-    setError("");
+    setActionError("");
     const formData = new FormData(e.currentTarget);
     
     const body = {
@@ -152,13 +141,12 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
         method: "POST",
         body: JSON.stringify(body),
       });
-      const rwds = await fetchAPI(`/profiles/${profileId}/rewards`);
-      setRewards(rwds);
+      mutateRewards();
       setSuccessMsg("Récompense ajoutée avec succès !");
       (e.target as HTMLFormElement).reset();
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err: any) {
-      setError(err.message || "Erreur lors de l'ajout");
+      setActionError(err.message || "Erreur lors de l'ajout");
     }
   };
 
@@ -282,7 +270,7 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
             <div className="space-y-3 mt-6">
               {questions.length === 0 ? (
                 <div className="text-center p-6 text-gray-500 text-sm">Aucune question personnalisée.</div>
-              ) : questions.map(q => (
+              ) : questions.map((q: CustomQuestion) => (
                 <div key={q.id} className="glass bg-white/60 p-4 rounded-xl border border-gray-100 flex justify-between items-start group">
                   <div>
                     <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{q.category}</span>
@@ -332,7 +320,7 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
             <div className="space-y-3 mt-6">
               {rewards.length === 0 ? (
                 <div className="text-center p-6 text-gray-500 text-sm">Aucune récompense disponible.</div>
-              ) : rewards.map(r => (
+              ) : rewards.map((r: Reward) => (
                 <div key={r.id} className={`glass p-4 rounded-xl border flex justify-between items-center ${r.is_claimed ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-success/20'}`}>
                   <div>
                     <h4 className={`font-semibold ${r.is_claimed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{r.title}</h4>

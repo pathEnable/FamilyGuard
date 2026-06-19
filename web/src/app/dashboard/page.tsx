@@ -18,10 +18,9 @@ type Profile = {
   alert_count?: number;
 };
 
+import useSWR from "swr";
+
 export default function DashboardPage() {
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -30,11 +29,9 @@ export default function DashboardPage() {
   // Initialize real-time WebSocket connection
   useWebSocket();
 
-  const loadData = async () => {
+  const fetchProfilesWithUsage = async (url: string) => {
     try {
-      const data = await fetchAPI("/profiles/");
-      
-      // Fetch daily usage for each profile concurrently
+      const data = await fetchAPI(url);
       const profilesWithUsage = await Promise.all(
         data.map(async (profile: Profile) => {
           try {
@@ -49,41 +46,41 @@ export default function DashboardPage() {
           }
         })
       );
-      
-      setProfiles(profilesWithUsage);
+      return profilesWithUsage;
     } catch (err: any) {
       if (err.message.includes("Non autorisé") || err.message.includes("Could not validate credentials")) {
         logout();
         router.push("/login");
-      } else {
-        setError(err.message || "Impossible de charger les profils");
       }
-    } finally {
-      setLoading(false);
+      throw err;
     }
   };
 
+  const { data: profiles = [], error, mutate, isLoading: loading } = useSWR('/profiles/', fetchProfilesWithUsage);
+
   useEffect(() => {
-    loadData();
-    
     // Request push notification permission
     if ("Notification" in window) {
       if (Notification.permission === "default") {
         Notification.requestPermission();
       }
     }
-  }, [router]);
+  }, []);
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.preventDefault();
     e.stopPropagation();
     if (!confirm("Voulez-vous vraiment supprimer ce profil ? Toutes les données seront perdues.")) return;
     
+    // Optimistic UI update
+    mutate(profiles.filter(p => p.id !== id), false);
+
     try {
       await fetchAPI(`/profiles/${id}`, { method: "DELETE" });
-      loadData();
+      mutate();
     } catch (err: any) {
-      setError(err.message || "Erreur lors de la suppression");
+      alert(err.message || "Erreur lors de la suppression");
+      mutate(); // revert on error
     }
     setActiveMenuId(null);
   };
@@ -269,7 +266,7 @@ export default function DashboardPage() {
       <ProfileModal 
         isOpen={isModalOpen}
         onClose={() => { setIsModalOpen(false); setEditingProfile(null); }}
-        onSuccess={loadData}
+        onSuccess={() => mutate()}
         profile={editingProfile}
       />
     </div>
