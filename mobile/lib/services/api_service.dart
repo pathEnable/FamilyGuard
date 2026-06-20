@@ -132,6 +132,31 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> pairDevice(String pairingCode) async {
+    final response = await _requestWithRetry(() => http.post(
+      Uri.parse('$baseUrl/auth/pair-device'),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'pairing_code': pairingCode,
+      }),
+    ));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      await setToken(data['access_token']);
+      return data;
+    } else {
+      String errorMessage = 'Erreur de liaison';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMessage = errorData['detail'] ?? errorMessage;
+      } catch (_) {}
+      throw Exception(errorMessage);
+    }
+  }
+
   static Future<List<dynamic>> getProfiles() async {
     final token = await getToken();
     if (token == null) {

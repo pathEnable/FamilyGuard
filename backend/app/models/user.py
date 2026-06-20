@@ -44,6 +44,8 @@ class Profile(Base):
     age = Column(Integer, nullable=False)
     avatar_url = Column(String, nullable=True)
     pin_code = Column(String, nullable=True) # Optional code to switch profiles
+    pairing_code = Column(String, nullable=True) # 6 digit code for device linking
+    pairing_code_expires_at = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True)
     is_locked = Column(Boolean, default=False)
     

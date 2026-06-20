@@ -66,6 +66,30 @@ def delete_profile(profile_id: int, db: Session = Depends(get_db), current_user:
     db.commit()
     return {"status": "success", "message": "Profile deleted"}
 
+import random
+import string
+from datetime import datetime, timezone
+
+@router.post("/{profile_id}/pairing-code")
+def generate_pairing_code(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    profile = db.query(Profile).filter(Profile.id == profile_id, Profile.parent_id == current_user.id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    code = ''.join(random.choices(string.digits, k=6))
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    
+    profile.pairing_code = code
+    profile.pairing_code_expires_at = expires_at
+    db.commit()
+    
+    return {
+        "status": "success", 
+        "pairing_code": code, 
+        "expires_at": expires_at.isoformat()
+    }
+
+
 from app.schemas.user import ActivityLogSchema
 from app.models.user import ActivityLog
 

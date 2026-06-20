@@ -6,7 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'theme.dart';
-import 'screens/login_screen.dart';
+
+import 'screens/role_selection_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'services/api_service.dart';
 import 'services/background_service.dart';
@@ -111,7 +112,7 @@ class SafeChildAppState extends State<SafeChildApp> {
     if (!_hasSeenOnboarding) {
       homeWidget = const OnboardingScreen();
     } else {
-      homeWidget = _isAuthenticated ? const DashboardScreen() : const LoginScreen();
+      homeWidget = _isAuthenticated ? const DashboardScreen() : const RoleSelectionScreen();
     }
 
     return MaterialApp(

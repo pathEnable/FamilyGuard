@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import { fetchAPI, logout } from "@/lib/api";
-import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2, Globe, Plus } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2, Globe, Plus, X } from "lucide-react";
+import { useState, useEffect } from "react";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 
 // Types
@@ -21,6 +21,12 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
 
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  
+  const [showPairingModal, setShowPairingModal] = useState(false);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingCodeExpiresAt, setPairingCodeExpiresAt] = useState<string | null>(null);
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<string>("");
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 3000); };
   const showError = (msg: string) => { setError(msg); setTimeout(() => setError(""), 5000); };
@@ -71,6 +77,41 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
       mutateProfiles(); // rollback
     }
   };
+
+  const generatePairingCode = async () => {
+    try {
+      setIsGeneratingCode(true);
+      const data = await fetchAPI(`/profiles/${profileId}/pairing-code`, { method: "POST" });
+      setPairingCode(data.pairing_code);
+      setPairingCodeExpiresAt(data.expires_at);
+    } catch (err: any) {
+      showError(err.message || "Erreur lors de la génération du code");
+    } finally {
+      setIsGeneratingCode(false);
+    }
+  };
+
+  // Countdown timer for pairing code
+  useEffect(() => {
+    if (!pairingCodeExpiresAt || !showPairingModal) return;
+    
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const expires = new Date(pairingCodeExpiresAt).getTime();
+      const distance = expires - now;
+      
+      if (distance < 0) {
+        clearInterval(interval);
+        setTimeLeft("Expiré");
+      } else {
+        const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+        setTimeLeft(`${minutes}m ${seconds}s`);
+      }
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [pairingCodeExpiresAt, showPairingModal]);
 
   const handleSaveDailyLimit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -257,6 +298,12 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
               </span>
               <button onClick={handleToggleLock} className={`px-4 py-1 rounded-full text-sm font-bold border transition-all shadow-sm ${profile.is_locked ? 'bg-success text-white border-success hover:bg-success/90' : 'bg-danger text-white border-danger hover:bg-danger/90'}`}>
                 {profile.is_locked ? '🔒 Débloquer l\'appareil' : '🔓 Bloquer maintenant'}
+              </button>
+              <button 
+                onClick={() => { setShowPairingModal(true); if (!pairingCode) generatePairingCode(); }} 
+                className="px-4 py-1 rounded-full text-sm font-bold border transition-all shadow-sm bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+              >
+                📱 Lier un appareil
               </button>
             </div>
           </div>
@@ -469,6 +516,64 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
           </div>
         </div>
       </main>
+
+      {/* Pairing Modal */}
+      {showPairingModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/40 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+              <h2 className="text-xl font-bold text-gray-900">Lier un appareil</h2>
+              <button onClick={() => setShowPairingModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-full hover:bg-gray-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-8 flex flex-col items-center justify-center text-center">
+              <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-6">
+                <Smartphone className="w-8 h-8" />
+              </div>
+              
+              <h3 className="text-lg font-bold text-gray-900 mb-2">Code de liaison</h3>
+              <p className="text-sm text-gray-500 mb-6">
+                Ouvrez l'application FamilyGuard sur l'appareil de {profile.name} et entrez ce code pour le lier à ce profil.
+              </p>
+              
+              {isGeneratingCode ? (
+                <div className="h-24 flex items-center justify-center">
+                  <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                </div>
+              ) : pairingCode ? (
+                <div className="w-full">
+                  <div className="bg-gray-100 py-4 px-6 rounded-2xl mb-4 border border-gray-200">
+                    <span className="text-4xl font-black tracking-[0.5em] text-gray-900 ml-[0.5em]">
+                      {pairingCode}
+                    </span>
+                  </div>
+                  {timeLeft === "Expiré" ? (
+                    <div className="text-danger font-medium flex items-center justify-center gap-2">
+                      <Clock className="w-4 h-4" /> Code expiré
+                    </div>
+                  ) : (
+                    <div className="text-primary font-medium flex items-center justify-center gap-2">
+                      <Clock className="w-4 h-4" /> Expire dans {timeLeft}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+            
+            <div className="p-6 border-t border-gray-100 bg-gray-50/50">
+              <button 
+                onClick={generatePairingCode} 
+                disabled={isGeneratingCode}
+                className="w-full bg-white border-2 border-gray-200 text-gray-700 hover:border-primary hover:text-primary font-bold py-3 rounded-xl transition-all"
+              >
+                Générer un nouveau code
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -92,3 +92,42 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     del reset_tokens[req.token]
     
     return {"status": "success", "message": "Mot de passe réinitialisé avec succès"}
+
+class PairDeviceRequest(BaseModel):
+    pairing_code: str
+
+@router.post("/pair-device")
+def pair_device(req: PairDeviceRequest, db: Session = Depends(get_db)):
+    from app.models.user import Profile
+    from datetime import timezone
+    
+    # Clean up whitespace
+    code = req.pairing_code.strip()
+    
+    profile = db.query(Profile).filter(Profile.pairing_code == code).first()
+    
+    if not profile:
+        raise HTTPException(status_code=400, detail="Code de liaison invalide ou introuvable.")
+        
+    if profile.pairing_code_expires_at and profile.pairing_code_expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Ce code de liaison a expiré. Veuillez en générer un nouveau.")
+        
+    # Valid code, clear it
+    profile.pairing_code = None
+    profile.pairing_code_expires_at = None
+    db.commit()
+    
+    # Generate child JWT
+    access_token = create_access_token(subject=f"child_{profile.id}")
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "profile": {
+            "id": profile.id,
+            "parent_id": profile.parent_id,
+            "name": profile.name,
+            "avatar_url": profile.avatar_url,
+            "strict_web_filter": profile.strict_web_filter
+        }
+    }
