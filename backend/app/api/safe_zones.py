@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
-from app.models.user import User, Profile, SafeZone
+from app.models import User, Profile, SafeZone
 from app.schemas.safe_zones import SafeZoneCreate, SafeZoneResponse, SafeZoneUpdate
 from app.api.deps import get_current_user
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ShieldAlert, Trophy, Star, Target, CheckCircle2, Gift, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Trophy, Star, Target, CheckCircle2, Gift, Plus, Trash2, ClipboardList, History, Check } from "lucide-react";
 import { fetchAPI } from "@/lib/api";
+import ConfirmModal from "@/components/ConfirmModal";
 
 interface Profile {
   id: number;
@@ -41,7 +42,23 @@ interface CustomQuestion {
   points: number;
 }
 
-import useSWR from "swr";
+interface Quest {
+  id: number;
+  title: string;
+  description: string;
+  points_reward: number;
+  status: string;
+  created_at: string;
+}
+
+interface PointTransaction {
+  id: number;
+  amount: number;
+  reason: string;
+  created_at: string;
+}
+
+import useSWR, { mutate } from "swr";
 
 export default function GamificationPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = use(params);
@@ -50,6 +67,19 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
   const [successMsg, setSuccessMsg] = useState("");
   const [actionError, setActionError] = useState("");
   const router = useRouter();
+
+  // Confirm modal state
+  type PendingAction = { label: string; message: string; action: () => Promise<void> } | null;
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+
+  const handleConfirm = useCallback(async () => {
+    if (!pendingAction) return;
+    const act = pendingAction;
+    setPendingAction(null);
+    try { await act.action(); } catch (err: any) { setActionError(err.message || "Erreur"); }
+  }, [pendingAction]);
+
+  const handleCancel = useCallback(() => setPendingAction(null), []);
 
   const fetcher = async (url: string) => {
     try {
@@ -66,10 +96,12 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
   const { data: summary, error: summaryError } = useSWR(`/profiles/${profileId}/gamification`, fetcher);
   const { data: rewards = [], error: rewardsError, mutate: mutateRewards } = useSWR(`/profiles/${profileId}/rewards`, fetcher);
   const { data: questions = [], error: questionsError, mutate: mutateQuestions } = useSWR(`/profiles/${profileId}/custom-questions`, fetcher);
+  const { data: quests = [], error: questsError, mutate: mutateQuests } = useSWR(`/profiles/${profileId}/quests`, fetcher);
+  const { data: history = [], error: historyError } = useSWR(`/profiles/${profileId}/points-history`, fetcher);
 
   const profile = profilesData.find((p: Profile) => p.id === parseInt(profileId));
   const loading = !profilesData.length || !summary;
-  const error = (profilesError || summaryError || rewardsError || questionsError) ? "Erreur de chargement" : actionError;
+  const error = (profilesError || summaryError || rewardsError || questionsError || questsError || historyError) ? "Erreur de chargement" : actionError;
 
   const handleAddQuestion = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -107,20 +139,17 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
   };
 
   const deleteQuestion = async (id: number) => {
-    if (!confirm("Supprimer cette question ?")) return;
-    
-    // Optimistic delete
-    mutateQuestions(questions.filter((q: CustomQuestion) => q.id !== id), false);
-    
-    try {
-      await fetchAPI(`/profiles/${profileId}/custom-questions/${id}`, { method: "DELETE" });
-      mutateQuestions();
-      setSuccessMsg("Question supprimée.");
-      setTimeout(() => setSuccessMsg(""), 3000);
-    } catch (err: any) {
-      setActionError(err.message || "Erreur");
-      mutateQuestions(); // Revert
-    }
+    setPendingAction({
+      label: "Supprimer la question",
+      message: "Supprimer cette question ?",
+      action: async () => {
+        mutateQuestions(questions.filter((q: CustomQuestion) => q.id !== id), false);
+        await fetchAPI(`/profiles/${profileId}/custom-questions/${id}`, { method: "DELETE" });
+        mutateQuestions();
+        setSuccessMsg("Question supprimée.");
+        setTimeout(() => setSuccessMsg(""), 3000);
+      },
+    });
   };
 
   const handleAddReward = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -147,6 +176,71 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err: any) {
       setActionError(err.message || "Erreur lors de l'ajout");
+    }
+  };
+
+  const deleteReward = async (id: number) => {
+    setPendingAction({
+      label: "Supprimer la récompense",
+      message: "Supprimer cette récompense ?",
+      action: async () => {
+        mutateRewards(rewards.filter((r: Reward) => r.id !== id), false);
+        await fetchAPI(`/profiles/${profileId}/rewards/${id}`, { method: "DELETE" });
+        mutateRewards();
+        setSuccessMsg("Récompense supprimée.");
+        setTimeout(() => setSuccessMsg(""), 3000);
+      },
+    });
+  };
+
+  const handleAddQuest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setSuccessMsg("");
+    setActionError("");
+    const formData = new FormData(e.currentTarget);
+    const body = {
+      title: formData.get("title") as string,
+      description: formData.get("description") as string,
+      points_reward: parseInt(formData.get("points_reward") as string)
+    };
+    try {
+      await fetchAPI(`/profiles/${profileId}/quests`, {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      mutateQuests();
+      setSuccessMsg("Mission ajoutée !");
+      (e.target as HTMLFormElement).reset();
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setActionError(err.message || "Erreur lors de l'ajout");
+    }
+  };
+
+  const deleteQuest = async (id: number) => {
+    setPendingAction({
+      label: "Supprimer la mission",
+      message: "Supprimer cette mission ?",
+      action: async () => {
+        mutateQuests(quests.filter((q: Quest) => q.id !== id), false);
+        await fetchAPI(`/profiles/${profileId}/quests/${id}`, { method: "DELETE" });
+        mutateQuests();
+        setSuccessMsg("Mission supprimée.");
+        setTimeout(() => setSuccessMsg(""), 3000);
+      },
+    });
+  };
+
+  const validateQuest = async (id: number) => {
+    try {
+      await fetchAPI(`/quests/${id}/validate`, { method: "PUT" });
+      mutateQuests();
+      mutate(`/profiles/${profileId}/gamification`);
+      mutate(`/profiles/${profileId}/points-history`);
+      setSuccessMsg("Mission validée !");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err: any) {
+      setActionError(err.message || "Erreur de validation");
     }
   };
 
@@ -233,7 +327,58 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           
+          {/* Quests Section */}
+          <div className="space-y-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-500">
+                <ClipboardList className="w-6 h-6" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">Missions & Quêtes</h2>
+            </div>
+            <p className="text-sm text-text-muted">Créez des missions pour récompenser votre enfant (ex: Ranger sa chambre).</p>
+
+            <div className="glass bg-white/80 p-6 rounded-2xl shadow-sm border border-white/50">
+              <form onSubmit={handleAddQuest} className="space-y-4">
+                <input name="title" placeholder="Titre (ex: Ranger sa chambre)" required className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 text-gray-900 text-sm" />
+                <div className="grid grid-cols-2 gap-4">
+                  <input name="description" placeholder="Description (optionnelle)" className="px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 text-gray-900 text-sm" />
+                  <input name="points_reward" type="number" min="1" placeholder="Points à gagner" required className="px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500/50 text-gray-900 text-sm" />
+                </div>
+                
+                <button type="submit" className="w-full bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2">
+                  <Plus className="w-4 h-4" /> Ajouter la mission
+                </button>
+              </form>
+            </div>
+
+            <div className="space-y-3 mt-6">
+              {quests.length === 0 ? (
+                <div className="text-center p-6 text-gray-500 text-sm">Aucune mission disponible.</div>
+              ) : quests.map((q: Quest) => (
+                <div key={q.id} className={`glass p-4 rounded-xl border flex justify-between items-center group ${q.status === 'validated' ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-purple-500/20'}`}>
+                  <div>
+                    <h4 className={`font-semibold ${q.status === 'validated' ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{q.title}</h4>
+                    <p className="text-xs text-gray-500 mt-0.5">+{q.points_reward} pts</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {q.status === 'pending' && <span className="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600">En attente</span>}
+                    {q.status === 'completed_by_child' && (
+                      <button onClick={() => validateQuest(q.id)} className="px-3 py-1 rounded-full text-xs font-bold bg-purple-500/10 text-purple-600 hover:bg-purple-500 hover:text-white transition-colors flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Valider
+                      </button>
+                    )}
+                    {q.status === 'validated' && <span className="px-3 py-1 rounded-full text-xs font-bold bg-success/10 text-success flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Validée</span>}
+                    <button onClick={() => deleteQuest(q.id)} className="text-gray-400 hover:text-danger opacity-0 group-hover:opacity-100 transition-all p-1">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Custom Questions Section */}
+
           <div className="space-y-6">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
@@ -321,21 +466,74 @@ export default function GamificationPage({ params }: { params: Promise<{ id: str
               {rewards.length === 0 ? (
                 <div className="text-center p-6 text-gray-500 text-sm">Aucune récompense disponible.</div>
               ) : rewards.map((r: Reward) => (
-                <div key={r.id} className={`glass p-4 rounded-xl border flex justify-between items-center ${r.is_claimed ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-success/20'}`}>
+                <div key={r.id} className={`glass p-4 rounded-xl border flex justify-between items-center group ${r.is_claimed ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-success/20'}`}>
                   <div>
                     <h4 className={`font-semibold ${r.is_claimed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{r.title}</h4>
                     <p className="text-xs text-gray-500 mt-0.5">+{r.bonus_minutes} min</p>
                   </div>
-                  <div className={`px-3 py-1 rounded-full text-xs font-bold ${r.is_claimed ? 'bg-gray-200 text-gray-600' : 'bg-success/10 text-success'}`}>
-                    {r.is_claimed ? 'Réclamée' : `${r.point_cost} pts`}
+                  <div className="flex items-center gap-3">
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${r.is_claimed ? 'bg-gray-200 text-gray-600' : 'bg-success/10 text-success'}`}>
+                      {r.is_claimed ? 'Réclamée' : `${r.point_cost} pts`}
+                    </div>
+                    <button onClick={() => deleteReward(r.id)} className="text-gray-400 hover:text-danger opacity-0 group-hover:opacity-100 transition-all">
+                      <Trash2 className="w-5 h-5" />
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
+          {/* History Section */}
+          <div className="space-y-6 lg:col-span-2 mt-4">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+                <History className="w-6 h-6" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">Historique des points</h2>
+            </div>
+            
+            <div className="glass bg-white/80 rounded-2xl shadow-sm border border-white/50 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-gray-50/50 text-gray-500 text-xs uppercase">
+                    <tr>
+                      <th className="px-6 py-4 font-bold">Date</th>
+                      <th className="px-6 py-4 font-bold">Motif</th>
+                      <th className="px-6 py-4 font-bold text-right">Points</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {history.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-8 text-center text-gray-500">Aucune transaction enregistrée.</td>
+                      </tr>
+                    ) : history.map((t: PointTransaction) => (
+                      <tr key={t.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">
+                          {new Date(t.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">{t.reason}</td>
+                        <td className={`px-6 py-4 text-right font-bold whitespace-nowrap ${t.amount >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {t.amount > 0 ? '+' : ''}{t.amount}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
         </div>
       </main>
+      <ConfirmModal
+        isOpen={!!pendingAction}
+        title={pendingAction?.label ?? ""}
+        message={pendingAction?.message ?? ""}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
     </div>
   );
 }

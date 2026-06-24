@@ -12,7 +12,7 @@ from typing import List, Optional
 from fpdf import FPDF
 from sqlalchemy.orm import Session
 
-from app.models.user import (
+from app.models import (
     Profile, AppUsage, ActivityLog, ActivityType,
     PointTransaction, Badge
 )

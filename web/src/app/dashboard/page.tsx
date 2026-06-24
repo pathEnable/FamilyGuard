@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchAPI, logout } from "@/lib/api";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { Shield, LogOut, Plus, ChevronRight, Activity, Clock, ShieldAlert, MoreVertical, Edit2, Trash2 } from "lucide-react";
 import ProfileModal from "@/components/ProfileModal";
+import ConfirmModal from "@/components/ConfirmModal";
+import { toast } from "sonner";
 
 type Profile = {
   id: string;
@@ -24,6 +26,7 @@ export default function DashboardPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const router = useRouter();
 
   // Initialize real-time WebSocket connection
@@ -32,21 +35,11 @@ export default function DashboardPage() {
   const fetchProfilesWithUsage = async (url: string) => {
     try {
       const data = await fetchAPI(url);
-      const profilesWithUsage = await Promise.all(
-        data.map(async (profile: Profile) => {
-          try {
-            const usageData = await fetchAPI(`/profiles/${profile.id}/daily-usage`);
-            return { 
-              ...profile, 
-              formatted_usage: usageData.formatted,
-              alert_count: usageData.alert_count 
-            };
-          } catch {
-            return { ...profile, formatted_usage: "0h 00m", alert_count: 0 };
-          }
-        })
-      );
-      return profilesWithUsage;
+      return data.map((profile: Profile) => ({
+        ...profile,
+        formatted_usage: profile.formatted_usage || "0h 00m",
+        alert_count: profile.alert_count || 0
+      }));
     } catch (err: any) {
       if (err.message.includes("Non autorisé") || err.message.includes("Could not validate credentials")) {
         logout();
@@ -67,23 +60,32 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
+  const handleDeleteRequest = (e: React.MouseEvent, id: string) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!confirm("Voulez-vous vraiment supprimer ce profil ? Toutes les données seront perdues.")) return;
-    
+    setPendingDeleteId(id);
+    setActiveMenuId(null);
+  };
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!pendingDeleteId) return;
+    const id = pendingDeleteId;
+    setPendingDeleteId(null);
+
     // Optimistic UI update
-    mutate(profiles.filter(p => p.id !== id), false);
+    mutate(profiles.filter((p: Profile) => p.id !== id), false);
 
     try {
       await fetchAPI(`/profiles/${id}`, { method: "DELETE" });
       mutate();
+      toast.success("Profil supprimé avec succès");
     } catch (err: any) {
-      alert(err.message || "Erreur lors de la suppression");
+      toast.error(err.message || "Erreur lors de la suppression");
       mutate(); // revert on error
     }
-    setActiveMenuId(null);
-  };
+  }, [pendingDeleteId, profiles, mutate]);
+
+  const handleDeleteCancel = useCallback(() => setPendingDeleteId(null), []);
 
   const handleEdit = (e: React.MouseEvent, profile: Profile) => {
     e.preventDefault();
@@ -173,7 +175,7 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {profiles.map((profile, idx) => (
+            {profiles.map((profile: Profile, idx: number) => (
               <Link 
                 href={`/dashboard/${profile.id}`} 
                 key={profile.id}
@@ -216,7 +218,7 @@ export default function DashboardPage() {
                             <Edit2 className="w-4 h-4" /> Modifier
                           </button>
                           <button 
-                            onClick={(e) => handleDelete(e, profile.id)}
+                            onClick={(e) => handleDeleteRequest(e, profile.id)}
                             className="w-full flex items-center gap-3 px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition-colors"
                           >
                             <Trash2 className="w-4 h-4" /> Supprimer
@@ -268,6 +270,14 @@ export default function DashboardPage() {
         onClose={() => { setIsModalOpen(false); setEditingProfile(null); }}
         onSuccess={() => mutate()}
         profile={editingProfile}
+      />
+      <ConfirmModal
+        isOpen={!!pendingDeleteId}
+        title="Supprimer le profil"
+        message="Voulez-vous vraiment supprimer ce profil ? Toutes les données seront perdues."
+        confirmLabel="Supprimer"
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
       />
     </div>
   );

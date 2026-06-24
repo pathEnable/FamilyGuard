@@ -24,13 +24,20 @@ class Settings(BaseSettings):
         """
         return self.DATABASE_URL or self.SQLALCHEMY_DATABASE_URI
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL: str = "redis://localhost:6379"
+
     # ── JWT ───────────────────────────────────────────────────────────────────
     SECRET_KEY: str = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOW_ALL_CORS: bool = False
+
+    # ── Monitoring ─────────────────────────────────────────────────────────────
+    SENTRY_DSN: Optional[str] = None  # Set in production env on Render
+    ENVIRONMENT: str = "development"  # "production" on Render
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

@@ -1,16 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
+from typing import List, Dict, Optional
 from app.core.database import get_db
-from app.models.user import User, Profile, ActivityLog, ActivityType, AppUsage
-from app.schemas.user import ProfileCreate, Profile as ProfileSchema
-from app.api.deps import get_current_user
+from app.models import User, Profile, ActivityLog, ActivityType, AppUsage
+from app.schemas.user import ProfileCreate, Profile as ProfileSchema, ActivityLogSchema
+from app.api.deps import get_current_user, verify_profile_access
 from app.core.security import pwd_context
 from app.api.ws import manager
+from app.core.cache import cache_response
 from pydantic import BaseModel
-from datetime import date, timedelta
-
+from datetime import date, timedelta, datetime, timezone
+import random
+import string
+from app.services.fcm_service import send_push_notification
+from app.services.pdf_report import generate_weekly_report
+from app.utils.app_names import get_app_info
 router = APIRouter()
 
 @router.post("/", response_model=ProfileSchema)
@@ -36,8 +41,36 @@ def create_profile(
     return new_profile
 
 @router.get("/", response_model=List[ProfileSchema])
+@cache_response(ttl_seconds=30, key_prefix="list_profiles")
 def list_profiles(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Profile).filter(Profile.parent_id == current_user.id).all()
+    profiles = db.query(Profile).filter(Profile.parent_id == current_user.id).all()
+    if not profiles:
+        return []
+        
+    profile_ids = [p.id for p in profiles]
+    today = date.today()
+    
+    # 1. Fetch usages for today for all child profiles
+    usages = db.query(AppUsage.profile_id, AppUsage.minutes_used).filter(
+        AppUsage.profile_id.in_(profile_ids),
+        AppUsage.date == today
+    ).all()
+    usage_dict = {u.profile_id: u.minutes_used for u in usages}
+    
+    # 2. Fetch alert counts for today for all child profiles
+    alerts = db.query(ActivityLog.profile_id, func.count(ActivityLog.id).label('alert_count')).filter(
+        ActivityLog.profile_id.in_(profile_ids),
+        func.date(ActivityLog.created_at) == today
+    ).group_by(ActivityLog.profile_id).all()
+    alerts_dict = {a.profile_id: a.alert_count for a in alerts}
+    
+    # 3. Assemble data
+    for p in profiles:
+        m_used = usage_dict.get(p.id, 0)
+        p.formatted_usage = f"{m_used // 60}h {m_used % 60:02d}m"
+        p.alert_count = alerts_dict.get(p.id, 0)
+        
+    return profiles
 
 @router.get("/{profile_id}", response_model=ProfileSchema)
 def get_profile(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -66,10 +99,6 @@ def delete_profile(profile_id: int, db: Session = Depends(get_db), current_user:
     db.commit()
     return {"status": "success", "message": "Profile deleted"}
 
-import random
-import string
-from datetime import datetime, timezone
-
 @router.post("/{profile_id}/pairing-code")
 def generate_pairing_code(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     profile = db.query(Profile).filter(Profile.id == profile_id, Profile.parent_id == current_user.id).first()
@@ -89,9 +118,6 @@ def generate_pairing_code(profile_id: int, db: Session = Depends(get_db), curren
         "expires_at": expires_at.isoformat()
     }
 
-
-from app.schemas.user import ActivityLogSchema
-from app.models.user import ActivityLog
 
 @router.get("/logs/all")
 def get_all_logs(
@@ -168,8 +194,6 @@ def get_profile_logs(
 # PIN CODE MANAGEMENT
 # ──────────────────────────────────────────────────────────
 
-from pydantic import BaseModel
-
 class PinSet(BaseModel):
     pin: str  # 4-6 digit PIN
 
@@ -237,9 +261,6 @@ def has_pin(
 # DAILY USAGE STATS (for web dashboard)
 # ──────────────────────────────────────────────────────────
 
-from app.models.user import AppUsage
-from datetime import date
-
 @router.get("/{profile_id}/daily-usage")
 def get_daily_usage(
     profile_id: int,
@@ -304,8 +325,6 @@ async def toggle_lock(
     
     return {"status": "success", "is_locked": profile.is_locked}
 
-from datetime import timedelta
-
 @router.get("/{profile_id}/weekly-usage")
 def get_weekly_usage(
     profile_id: int,
@@ -353,13 +372,12 @@ def get_weekly_usage(
 class HarassmentAlert(BaseModel):
     app_package: str
 
-from app.services.fcm_service import send_push_notification
-
 @router.post("/{profile_id}/harassment-alert")
 def trigger_harassment_alert(
     profile_id: int,
     alert_data: HarassmentAlert,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_profile_access)
 ):
     """Triggered by child device when bad words are detected in notifications."""
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -389,10 +407,6 @@ def trigger_harassment_alert(
     return {"status": "success", "message": "Harassment alert processed"}
 
 
-from typing import Dict
-
-from typing import Dict, Optional
-
 class UsageStatsPayload(BaseModel):
     stats: Dict[str, int]  # package_name -> minutes_used
     app_names: Optional[Dict[str, str]] = None  # package_name -> app_name
@@ -401,7 +415,8 @@ class UsageStatsPayload(BaseModel):
 async def update_usage_stats(
     profile_id: int,
     payload: UsageStatsPayload,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_profile_access)
 ):
     """Called periodically by the child app to sync app usage."""
     today = date.today()
@@ -446,8 +461,6 @@ async def update_usage_stats(
 # ──────────────────────────────────────────────────────────
 # DETAILED APP USAGE & SEARCH LOGS
 # ──────────────────────────────────────────────────────────
-
-from app.utils.app_names import get_app_info
 
 @router.get("/{profile_id}/app-usage-detail")
 def get_app_usage_detail(

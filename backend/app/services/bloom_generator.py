@@ -26,8 +26,8 @@ class BloomFilter:
             self.bit_array.setall(0)
     
     def _get_hashes(self, item: str):
-        # Calculate h1 and h2 from MD5
-        digest = hashlib.md5(item.encode('utf-8')).digest()
+        # Calculate h1 and h2 from SHA-256
+        digest = hashlib.sha256(item.encode('utf-8')).digest()
         # >I is big-endian 32-bit unsigned integer (safe for Dart cross-compat)
         h1 = struct.unpack('>I', digest[0:4])[0]
         h2 = struct.unpack('>I', digest[4:8])[0]

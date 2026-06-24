@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import { fetchAPI, logout } from "@/lib/api";
-import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2, Globe, Plus, X } from "lucide-react";
-import { useState, useEffect } from "react";
+import { ArrowLeft, Clock, Moon, ShieldAlert, Smartphone, Activity, Trash2, CheckCircle2, Globe, Plus, X, FileText } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
+import ConfirmModal from "@/components/ConfirmModal";
 
 // Types
 type Profile = { id: number; name: string; age: number; is_active: boolean; is_locked: boolean; };
@@ -27,6 +28,19 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
   const [pairingCodeExpiresAt, setPairingCodeExpiresAt] = useState<string | null>(null);
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
   const [timeLeft, setTimeLeft] = useState<string>("");
+
+  // Confirm modal state
+  type PendingAction = { label: string; message: string; action: () => Promise<void> } | null;
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+
+  const handleConfirm = useCallback(async () => {
+    if (!pendingAction) return;
+    const act = pendingAction;
+    setPendingAction(null);
+    try { await act.action(); } catch (err: any) { showError(err.message); }
+  }, [pendingAction]);
+
+  const handleCancel = useCallback(() => setPendingAction(null), []);
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 3000); };
   const showError = (msg: string) => { setError(msg); setTimeout(() => setError(""), 5000); };
@@ -75,6 +89,54 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
     } catch (err: any) {
       showError(err.message || "Erreur lors du verrouillage");
       mutateProfiles(); // rollback
+    }
+  };
+
+  const handleDisconnectEarly = async () => {
+    if (!profile) return;
+    try {
+      await fetchAPI(`/profiles/${profileId}/disconnect-early`, { method: "POST" });
+      showSuccess("Déconnexion anticipée enregistrée. L'appareil est bloqué et les points sont accordés !");
+      mutateProfiles();
+    } catch (err: any) {
+      showError(err.message || "Erreur lors de la déconnexion anticipée");
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+      const res = await fetch(`${apiUrl}/reports/${profileId}/latest.pdf`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!res.ok) throw new Error("Erreur lors de la génération du rapport");
+      
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `rapport_hebdo_${profile?.name}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      showSuccess("Rapport PDF téléchargé !");
+    } catch (err: any) {
+      showError(err.message || "Erreur lors du téléchargement du rapport");
+    }
+  };
+
+  const handleSendEmailReport = async () => {
+    try {
+      await fetchAPI(`/reports/${profileId}/send-report`, {
+        method: "POST"
+      });
+      showSuccess("Rapport PDF envoyé par email !");
+    } catch (err: any) {
+      showError(err.message || "Erreur lors de l'envoi de l'email");
     }
   };
 
@@ -154,12 +216,15 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
   };
 
   const deleteRule = async (ruleId: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer cette règle ?")) return;
-    try {
-      await fetchAPI(`/profiles/${profileId}/rules/${ruleId}`, { method: "DELETE" });
-      mutateRules();
-      showSuccess("Règle supprimée.");
-    } catch (err: any) { showError(err.message); }
+    setPendingAction({
+      label: "Supprimer la règle",
+      message: "Voulez-vous vraiment supprimer cette règle ?",
+      action: async () => {
+        await fetchAPI(`/profiles/${profileId}/rules/${ruleId}`, { method: "DELETE" });
+        mutateRules();
+        showSuccess("Règle supprimée.");
+      },
+    });
   };
 
   const handleToggleAppBlock = async (packageName: string, isBlocked: boolean) => {
@@ -189,12 +254,15 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
   };
 
   const handleDeleteWebRule = async (ruleId: number) => {
-    if (!confirm("Supprimer cette règle ?")) return;
-    try {
-      await fetchAPI(`/filtering/profiles/${profileId}/rules/${ruleId}`, { method: "DELETE" });
-      mutateFilterData();
-      showSuccess("Règle supprimée.");
-    } catch (err: any) { showError(err.message); }
+    setPendingAction({
+      label: "Supprimer la règle web",
+      message: "Supprimer cette règle de filtrage ?",
+      action: async () => {
+        await fetchAPI(`/filtering/profiles/${profileId}/rules/${ruleId}`, { method: "DELETE" });
+        mutateFilterData();
+        showSuccess("Règle supprimée.");
+      },
+    });
   };
 
   const handleAddWebRule = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -272,6 +340,12 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
             <Link href={`/dashboard/${profileId}/gamification`} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all">
               <span className="text-xl">🎮</span> <span className="hidden sm:inline">Gamification</span>
             </Link>
+            <button onClick={handleDownloadReport} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all" title="Télécharger le rapport PDF">
+              <FileText className="w-4 h-4" /> <span className="hidden sm:inline">PDF</span>
+            </button>
+            <button onClick={handleSendEmailReport} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all" title="Envoyer par email">
+              <span className="text-xl">📧</span> <span className="hidden sm:inline">Email</span>
+            </button>
             <Link href="/dashboard/logs" className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-text-muted hover:text-primary hover:bg-white/50 rounded-lg transition-all">
               <Activity className="w-4 h-4" /> <span className="hidden sm:inline">Historique</span>
             </Link>
@@ -299,6 +373,14 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
               <button onClick={handleToggleLock} className={`px-4 py-1 rounded-full text-sm font-bold border transition-all shadow-sm ${profile.is_locked ? 'bg-success text-white border-success hover:bg-success/90' : 'bg-danger text-white border-danger hover:bg-danger/90'}`}>
                 {profile.is_locked ? '🔒 Débloquer l\'appareil' : '🔓 Bloquer maintenant'}
               </button>
+              {!profile.is_locked && (
+                <button 
+                  onClick={handleDisconnectEarly} 
+                  className="px-4 py-1 rounded-full text-sm font-bold border transition-all shadow-sm bg-purple-600 text-white border-purple-600 hover:bg-purple-700"
+                >
+                  🔌 Déconnexion anticipée
+                </button>
+              )}
               <button 
                 onClick={() => { setShowPairingModal(true); if (!pairingCode) generatePairingCode(); }} 
                 className="px-4 py-1 rounded-full text-sm font-bold border transition-all shadow-sm bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
@@ -574,6 +656,13 @@ export default function ProfileSettingsPage({ params }: { params: Promise<{ id: 
           </div>
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!pendingAction}
+        title={pendingAction?.label ?? ""}
+        message={pendingAction?.message ?? ""}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
     </div>
   );
 }

@@ -30,7 +30,7 @@ class BloomFilter {
     if (m == 0) return false;
 
     final bytes = utf8.encode(item);
-    final digestBytes = md5.convert(bytes).bytes;
+    final digestBytes = sha256.convert(bytes).bytes;
     
     final digestData = ByteData.view(
       Uint8List.fromList(digestBytes).buffer,

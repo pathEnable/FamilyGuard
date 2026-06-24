@@ -8,7 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import date
 
 from app.core.database import SessionLocal
-from app.models.user import User, Profile
+from app.models import User, Profile
 from app.services.pdf_report import generate_weekly_report
 from app.services.email_service import send_weekly_report_email
 

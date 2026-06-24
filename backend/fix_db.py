@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.core.database import SessionLocal
-from app.models.user import Profile
+from app.models import Profile
 
 def fix():
     db = SessionLocal()

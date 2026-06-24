@@ -6,10 +6,11 @@ from datetime import datetime, date, timedelta
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.api.deps import get_current_user
-from app.models.user import User, Profile, PointTransaction, Badge, Reward, BadgeType, Quest, QuestStatus, QuizQuestion, QuizAttempt
+from app.api.deps import get_current_user, get_current_profile, verify_profile_access
+from app.models import User, Profile, PointTransaction, Badge, Reward, BadgeType, Quest, QuestStatus, QuizQuestion, QuizAttempt, AppUsage, TimeRule, RuleType
 from app.api.ws import manager
 from app.core.firebase import send_push_notification
+from app.core.cache import cache_response
 import random
 
 router = APIRouter()
@@ -143,12 +144,13 @@ def _get_profile_for_parent(profile_id: int, db: Session, current_user: User) ->
 # ── Endpoints ──
 
 @router.get("/{profile_id}/gamification", response_model=GamificationSummarySchema)
+@cache_response(ttl_seconds=120, key_prefix="gamification_summary")
 def get_gamification_summary(
     profile_id: int, 
     db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
+    authorized: bool = Depends(verify_profile_access)
 ):
-    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
         
@@ -188,14 +190,16 @@ def create_reward(
 @router.get("/{profile_id}/rewards", response_model=List[RewardSchema])
 def list_rewards(
     profile_id: int,
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    authorized: bool = Depends(verify_profile_access)
 ):
-    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
         
-    return db.query(Reward).filter(Reward.profile_id == profile_id).order_by(Reward.is_claimed.asc(), Reward.created_at.desc()).all()
+    return db.query(Reward).filter(Reward.profile_id == profile_id).order_by(Reward.is_claimed.asc(), Reward.created_at.desc()).offset(skip).limit(limit).all()
 
 
 @router.post("/{profile_id}/rewards/{reward_id}/claim")
@@ -203,9 +207,9 @@ async def claim_reward(
     profile_id: int,
     reward_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    authorized: bool = Depends(verify_profile_access)
 ):
-    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -245,28 +249,52 @@ async def claim_reward(
 @router.get("/{profile_id}/points-history", response_model=List[PointTransactionSchema])
 def get_points_history(
     profile_id: int,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_profile_access)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    return db.query(PointTransaction).filter(PointTransaction.profile_id == profile_id).order_by(PointTransaction.created_at.desc()).offset(skip).limit(limit).all()
+
+
+@router.delete("/{profile_id}/rewards/{reward_id}")
+def delete_reward(
+    profile_id: int,
+    reward_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     profile = next((p for p in current_user.profiles if p.id == profile_id), None)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+
+    reward = db.query(Reward).filter(Reward.id == reward_id, Reward.profile_id == profile_id).first()
+    if not reward:
+        raise HTTPException(status_code=404, detail="Reward not found")
         
-    return db.query(PointTransaction).filter(PointTransaction.profile_id == profile_id).order_by(PointTransaction.created_at.desc()).all()
+    db.delete(reward)
+    db.commit()
+    
+    return {"status": "success", "message": "Récompense supprimée avec succès !"}
+
 
 
 @router.post("/{profile_id}/check-streak")
 def update_streak(
     profile_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    authorized: bool = Depends(verify_profile_access)
 ):
     """
     Called daily (e.g. via background job) or lazily to verify if the child 
     respected limits yesterday.
     For demonstration, this endpoint artificially increases the streak by 1.
     """
-    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -291,14 +319,14 @@ def update_streak(
 async def disconnect_early(
     profile_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    authorized: bool = Depends(verify_profile_access)
 ):
     """
     Called by the child app when they intentionally disconnect before their 
     screen time is fully consumed.
     Awards 1 point per 5 minutes saved, then locks the device for the rest of the day.
     """
-    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profil introuvable")
 
@@ -307,8 +335,6 @@ async def disconnect_early(
 
     # Get today's usage and daily limit to calculate remaining time
     today = date.today()
-    from app.models.user import AppUsage, TimeRule, RuleType
-    
     usage = db.query(AppUsage).filter(
         AppUsage.profile_id == profile.id,
         AppUsage.date == today
@@ -339,7 +365,7 @@ async def disconnect_early(
     db.commit()
 
     # Broadcast to update parent UI and child device state
-    await manager.broadcast_to_parent(current_user.id, {
+    await manager.broadcast_to_parent(profile.parent_id, {
         "type": "rules_updated",
         "profile_id": profile.id,
         "action": "disconnect_early"
@@ -358,13 +384,15 @@ async def disconnect_early(
 @router.get("/{profile_id}/quests", response_model=List[QuestSchema])
 def get_quests(
     profile_id: int,
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db),
-    # Both parent and child can view quests, skipping auth restriction for child token for simplicity
+    authorized: bool = Depends(verify_profile_access)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile: raise HTTPException(status_code=404, detail="Profil introuvable")
 
-    return db.query(Quest).filter(Quest.profile_id == profile.id).order_by(Quest.created_at.desc()).all()
+    return db.query(Quest).filter(Quest.profile_id == profile.id).order_by(Quest.created_at.desc()).offset(skip).limit(limit).all()
 
 
 @router.post("/{profile_id}/quests", response_model=QuestSchema)
@@ -393,10 +421,14 @@ def create_quest(
 async def complete_quest(
     quest_id: int,
     db: Session = Depends(get_db),
+    current_profile: Profile = Depends(get_current_profile)
 ):
     # L'enfant marque la quête comme terminée (en attente de validation)
     quest = db.query(Quest).filter(Quest.id == quest_id).first()
     if not quest: raise HTTPException(status_code=404, detail="Quête introuvable")
+    
+    if quest.profile_id != current_profile.id:
+        raise HTTPException(status_code=403, detail="Non autorisé")
 
     if quest.status != QuestStatus.PENDING:
         raise HTTPException(status_code=400, detail="Cette quête ne peut pas être terminée")
@@ -462,6 +494,23 @@ async def validate_quest(
 
     return {"message": f"Quête validée, +{quest.points_reward} points accordés !"}
 
+
+@router.delete("/{profile_id}/quests/{quest_id}")
+def delete_quest(
+    profile_id: int,
+    quest_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    profile = _get_profile_for_parent(profile_id, db, current_user)
+    quest = db.query(Quest).filter(Quest.id == quest_id, Quest.profile_id == profile.id).first()
+    if not quest:
+        raise HTTPException(status_code=404, detail="Quête introuvable")
+
+    db.delete(quest)
+    db.commit()
+    return {"message": "Quête supprimée avec succès"}
+
 # ──────────────────────────────────────────────────────────
 # MINI-GAMES / QUIZ
 # ──────────────────────────────────────────────────────────
@@ -470,7 +519,8 @@ async def validate_quest(
 def get_quiz_questions(
     profile_id: int,
     limit: int = 5,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_profile_access)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile: raise HTTPException(status_code=404, detail="Profil introuvable")
@@ -515,7 +565,8 @@ def get_quiz_questions(
 async def submit_quiz_answer(
     profile_id: int,
     submit_data: QuizSubmitSchema,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_profile_access)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile: raise HTTPException(status_code=404, detail="Profil introuvable")
@@ -608,11 +659,13 @@ class QuizQuestionFullSchema(BaseModel):
 @router.get("/{profile_id}/custom-questions", response_model=List[QuizQuestionFullSchema])
 def get_custom_questions(
     profile_id: int,
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     profile = _get_profile_for_parent(profile_id, db, current_user)
-    return db.query(QuizQuestion).filter(QuizQuestion.profile_id == profile.id).all()
+    return db.query(QuizQuestion).filter(QuizQuestion.profile_id == profile.id).offset(skip).limit(limit).all()
 
 @router.post("/{profile_id}/custom-questions", response_model=QuizQuestionFullSchema)
 def add_custom_question(

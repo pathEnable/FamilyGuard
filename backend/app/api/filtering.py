@@ -4,8 +4,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.deps import get_current_user
-from app.models.user import User
-from pydantic import BaseModel
+from app.models import User, Profile, ActivityLog, ActivityType, WebFilterRule, FilterRuleType
+from app.api.ws import manager
 import os
 
 # Ensure the bloom generator creates the file at startup
@@ -20,7 +20,7 @@ class WebFilterRuleCreate(BaseModel):
 class WebFilterRuleResponse(BaseModel):
     id: int
     url_pattern: str
-    rule_type: str # Or use FilterRuleType, but wait! We can use from app.models.user import FilterRuleType but it creates circular imports if placed incorrectly.
+    rule_type: str # Or use FilterRuleType, but wait! We can use from app.models import FilterRuleType but it creates circular imports if placed incorrectly.
     # To fix string serialization safely in Pydantic v1 and v2, we can just use Config
     
     class Config:
@@ -58,8 +58,6 @@ async def log_blocked_url(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from app.models.user import Profile, ActivityLog, ActivityType
-    from app.api.ws import manager
 
     # Verify profile belongs to current user
     profile = db.query(Profile).filter(
@@ -97,7 +95,6 @@ def get_web_filters(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from app.models.user import Profile, WebFilterRule
     profile = db.query(Profile).filter(
         Profile.id == profile_id,
         Profile.parent_id == current_user.id
@@ -118,9 +115,6 @@ async def add_web_filter_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from app.models.user import Profile, WebFilterRule, FilterRuleType
-    from app.api.ws import manager
-    
     profile = db.query(Profile).filter(
         Profile.id == profile_id,
         Profile.parent_id == current_user.id
@@ -153,9 +147,6 @@ async def delete_web_filter_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from app.models.user import Profile, WebFilterRule
-    from app.api.ws import manager
-    
     profile = db.query(Profile).filter(
         Profile.id == profile_id,
         Profile.parent_id == current_user.id
@@ -188,9 +179,6 @@ async def toggle_strict_mode(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from app.models.user import Profile
-    from app.api.ws import manager
-    
     profile = db.query(Profile).filter(
         Profile.id == profile_id,
         Profile.parent_id == current_user.id

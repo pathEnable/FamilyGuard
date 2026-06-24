@@ -1,74 +1,38 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from sqlalchemy.orm import Session
-from datetime import date, timedelta
-from typing import List
-
+from datetime import date
 from app.core.database import get_db
 from app.api.deps import get_current_user
-from app.models.user import User, Profile, AppUsage, Quest, QuestStatus
-from app.core.email import send_email
+from app.models import User, Profile
+from app.services.pdf_report import generate_weekly_report
+from app.services.email_service import send_weekly_report_email
 
 router = APIRouter()
 
-def generate_report_html(profile: Profile, usage: List[AppUsage], completed_quests: List[Quest]) -> str:
-    html = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: 'Arial', sans-serif; color: #333; }}
-            h2 {{ color: #2563EB; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .section {{ margin-bottom: 20px; padding: 15px; background: #F8FAFC; border-radius: 8px; }}
-            ul {{ list-style-type: none; padding: 0; }}
-            li {{ padding: 8px 0; border-bottom: 1px solid #ddd; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>Rapport d'Activité pour {profile.name}</h2>
-            <p>Voici le résumé des activités récentes de {profile.name}.</p>
-            
-            <div class="section">
-                <h3>Utilisation des Applications (Aujourd'hui)</h3>
-                <ul>
+@router.get("/{profile_id}/latest.pdf")
+def get_latest_pdf_report(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
-    
-    if usage:
-        for u in usage:
-            html += f"<li><strong>{u.package_name}</strong>: {u.minutes_used} minutes</li>"
-    else:
-        html += "<li>Aucune utilisation enregistrée aujourd'hui.</li>"
+    Télécharge le rapport PDF de la semaine pour le profil donné.
+    """
+    profile = next((p for p in current_user.profiles if p.id == profile_id), None)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profil introuvable")
 
-    html += """
-                </ul>
-            </div>
-            
-            <div class="section">
-                <h3>Quêtes Récentes (Validées ou Terminées)</h3>
-                <ul>
-    """
-    
-    if completed_quests:
-        for q in completed_quests:
-            status_fr = "Validée" if q.status == QuestStatus.VALIDATED else "En attente"
-            html += f"<li><strong>{q.title}</strong> - {q.points_reward} pts ({status_fr})</li>"
-    else:
-        html += "<li>Aucune quête complétée récemment.</li>"
-
-    html += f"""
-                </ul>
-            </div>
-            
-            <div class="section">
-                <h3>Points Totaux: {profile.total_points}</h3>
-            </div>
-            
-            <p style="font-size: 12px; color: #64748B; margin-top: 30px;">Ceci est un rapport automatique généré par FamilyGuard.</p>
-        </div>
-    </body>
-    </html>
-    """
-    return html
+    try:
+        pdf_bytes = generate_weekly_report(db, profile)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="rapport_{profile.name}.pdf"'
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du PDF: {str(e)}")
 
 @router.post("/{profile_id}/send-report")
 def send_activity_report(
@@ -77,6 +41,9 @@ def send_activity_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Génère et envoie le rapport PDF par email au parent.
+    """
     profile = next((p for p in current_user.profiles if p.id == profile_id), None)
     if not profile:
         raise HTTPException(status_code=404, detail="Profil introuvable")
@@ -84,26 +51,18 @@ def send_activity_report(
     if not current_user.email:
         raise HTTPException(status_code=400, detail="L'email du parent n'est pas configuré.")
         
-    today = date.today()
+    # Generate PDF inline to ensure it succeeds before scheduling email,
+    # or we could generate it in the background task entirely to save response time.
+    # For now, we generate in background to keep API fast.
     
-    usage_stats = db.query(AppUsage).filter(
-        AppUsage.profile_id == profile_id,
-        AppUsage.date == today
-    ).all()
-    
-    recent_quests = db.query(Quest).filter(
-        Quest.profile_id == profile_id,
-        Quest.status.in_([QuestStatus.COMPLETED_BY_CHILD, QuestStatus.VALIDATED])
-    ).order_by(Quest.updated_at.desc()).limit(10).all()
-    
-    html_content = generate_report_html(profile, usage_stats, recent_quests)
-    
-    # Run email sending in background
-    background_tasks.add_task(
-        send_email,
-        to_email=current_user.email,
-        subject=f"FamilyGuard : Rapport d'Activité de {profile.name}",
-        html_content=html_content
-    )
+    def background_generate_and_send():
+        try:
+            pdf_bytes = generate_weekly_report(db, profile)
+            send_weekly_report_email(current_user.email, profile.name, pdf_bytes)
+        except Exception as e:
+            print(f"Erreur envoi email: {e}")
+
+    background_tasks.add_task(background_generate_and_send)
 
     return {"status": "success", "message": "Le rapport d'activité a été planifié pour l'envoi."}
+

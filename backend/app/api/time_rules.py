@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import date, datetime
 from app.core.database import get_db
-from app.models.user import User, Profile, TimeRule, AppUsage, RuleType
+from app.models import User, Profile, TimeRule, AppUsage, RuleType
 from app.schemas.time_rules import (
     TimeRuleCreate, TimeRuleResponse, TimeRuleUpdate,
     AppUsageResponse, TimeStatus, TimeUsageReport

@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.database import Base
 
 # Import all models so Alembic autogenerates their tables
-import app.models.user  # noqa: F401
+import app.models  # noqa: F401
 
 # ── Alembic Config object ─────────────────────────────────────────────────────
 config = context.config

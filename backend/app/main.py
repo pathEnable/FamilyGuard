@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import traceback
+
 from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.database import Base, engine
@@ -9,73 +10,10 @@ from app.core import firebase
 from app.api import filtering, auth, profiles, time_rules, sos, ws, gamification, safe_zones, location, reports
 from app.services.scheduler import start_scheduler, stop_scheduler
 
-# Initialize DB models
-Base.metadata.create_all(bind=engine)
 
-# Auto-migrate missing columns
-from sqlalchemy import text
 
-# Migration 1: strict_web_filter
-try:
-    with engine.begin() as conn:
-        try:
-            conn.execute(text('ALTER TABLE profiles ADD COLUMN strict_web_filter BOOLEAN DEFAULT FALSE;'))
-            print("Added strict_web_filter to profiles")
-        except Exception:
-            pass
-except Exception:
-    pass
-
-# Migration 2: app_name
-try:
-    with engine.begin() as conn:
-        try:
-            conn.execute(text('ALTER TABLE app_usages ADD COLUMN app_name VARCHAR;'))
-            print("Added app_name to app_usages")
-        except Exception:
-            pass
-except Exception:
-    pass
-
-# Migration 3: package_name
-try:
-    with engine.begin() as conn:
-        try:
-            conn.execute(text('ALTER TABLE app_usages ADD COLUMN package_name VARCHAR NOT NULL DEFAULT \'unknown\';'))
-            print("Added package_name to app_usages")
-        except Exception:
-            pass
-except Exception:
-    pass
-
-# Migration 4: Gamification columns on profiles
-for col_name, col_default in [
-    ('total_points', '0'),
-    ('current_streak', '0'),
-    ('best_streak', '0'),
-    ('avatar_level', '1'),
-]:
-    try:
-        with engine.begin() as conn:
-            try:
-                conn.execute(text(f'ALTER TABLE profiles ADD COLUMN {col_name} INTEGER DEFAULT {col_default};'))
-                print(f"Added {col_name} to profiles")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-# Migration 5: Fix NULL gamification values on existing profiles
-try:
-    with engine.begin() as conn:
-        conn.execute(text('UPDATE profiles SET total_points = 0 WHERE total_points IS NULL;'))
-        conn.execute(text('UPDATE profiles SET current_streak = 0 WHERE current_streak IS NULL;'))
-        conn.execute(text('UPDATE profiles SET best_streak = 0 WHERE best_streak IS NULL;'))
-        conn.execute(text('UPDATE profiles SET avatar_level = 1 WHERE avatar_level IS NULL;'))
-        print("Fixed NULL gamification values")
-except Exception:
-    pass
-
+# DB is now managed by Alembic
+# Please run `alembic upgrade head` to apply migrations
 # Initialize Firebase Admin
 firebase.init_firebase()
 

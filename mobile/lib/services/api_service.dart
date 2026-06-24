@@ -5,15 +5,22 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiService {
-  static String get baseUrl {
-    return 'https://familyguard-znbt.onrender.com/api/v1';
-  }
+  // URL configurable via : flutter run --dart-define=BASE_URL=http://192.168.1.x:8000/api/v1
+  // En production (build sans --dart-define), l'URL de prod est utilisée par défaut.
+  static const String baseUrl = String.fromEnvironment(
+    'BASE_URL',
+    defaultValue: 'https://familyguard-znbt.onrender.com/api/v1',
+  );
+
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
   static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
+    return _storage.read(key: 'auth_token');
   }
 
   static Future<int?> getParentId() async {
@@ -32,13 +39,13 @@ class ApiService {
   }
 
   static Future<void> setToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('token', token);
-    
+    await _storage.write(key: 'auth_token', value: token);
+
     // Sync token with native Android for Background Geofencing
     if (Platform.isAndroid) {
       try {
         const platform = MethodChannel('com.familyguard/geofence');
+        final prefs = await SharedPreferences.getInstance();
         final currentProfileId = prefs.getInt('current_profile_id') ?? -1;
         await platform.invokeMethod('syncAuthData', {
           'token': token,
@@ -52,8 +59,7 @@ class ApiService {
   }
 
   static Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('token');
+    await _storage.delete(key: 'auth_token');
   }
 
   // ── Network Helper with Retry & Friendly Errors ──
@@ -482,7 +488,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
     
     final response = await _requestWithRetry(() => http.get(
-      Uri.parse('$baseUrl/gamification/$profileId'),
+      Uri.parse('$baseUrl/profiles/$profileId/gamification'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -501,7 +507,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
     
     final response = await _requestWithRetry(() => http.get(
-      Uri.parse('$baseUrl/gamification/$profileId/rewards'),
+      Uri.parse('$baseUrl/profiles/$profileId/rewards'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -520,7 +526,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
     
     final response = await _requestWithRetry(() => http.post(
-      Uri.parse('$baseUrl/gamification/$profileId/rewards/$rewardId/claim'),
+      Uri.parse('$baseUrl/profiles/$profileId/rewards/$rewardId/claim'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -609,7 +615,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
     
     final response = await http.post(
-      Uri.parse('$baseUrl/gamification/$profileId/disconnect-early'),
+      Uri.parse('$baseUrl/profiles/$profileId/disconnect-early'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -635,7 +641,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await http.get(
-      Uri.parse('$baseUrl/gamification/$profileId/quests'),
+      Uri.parse('$baseUrl/profiles/$profileId/quests'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -654,7 +660,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await http.put(
-      Uri.parse('$baseUrl/gamification/quests/$questId/complete'),
+      Uri.parse('$baseUrl/profiles/quests/$questId/complete'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -671,7 +677,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await http.put(
-      Uri.parse('$baseUrl/gamification/quests/$questId/validate'),
+      Uri.parse('$baseUrl/profiles/quests/$questId/validate'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -690,7 +696,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await http.get(
-      Uri.parse('$baseUrl/gamification/$profileId/quiz/questions?limit=$limit'),
+      Uri.parse('$baseUrl/profiles/$profileId/quiz/questions?limit=$limit'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -709,7 +715,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await http.post(
-      Uri.parse('$baseUrl/gamification/$profileId/quiz/submit'),
+      Uri.parse('$baseUrl/profiles/$profileId/quiz/submit'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -878,7 +884,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await _requestWithRetry(() => http.get(
-      Uri.parse('$baseUrl/gamification/$profileId/custom-questions'),
+      Uri.parse('$baseUrl/profiles/$profileId/custom-questions'),
       headers: {
         'Authorization': 'Bearer $token',
       },
@@ -896,7 +902,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await _requestWithRetry(() => http.post(
-      Uri.parse('$baseUrl/gamification/$profileId/custom-questions'),
+      Uri.parse('$baseUrl/profiles/$profileId/custom-questions'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -916,7 +922,7 @@ class ApiService {
     if (token == null) throw Exception('Non autorisé');
 
     final response = await _requestWithRetry(() => http.delete(
-      Uri.parse('$baseUrl/gamification/$profileId/custom-questions/$questionId'),
+      Uri.parse('$baseUrl/profiles/$profileId/custom-questions/$questionId'),
       headers: {
         'Authorization': 'Bearer $token',
       },

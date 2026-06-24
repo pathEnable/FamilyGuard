@@ -1,7 +1,7 @@
 import asyncio
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
-from app.models.user import Profile, Reward
+from app.models import Profile, Reward
 
 async def seed_rewards():
     db = SessionLocal()

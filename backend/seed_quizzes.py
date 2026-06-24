@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import SessionLocal
-from app.models.user import QuizQuestion
+from app.models import QuizQuestion
 from app.api.quiz_data import QUIZ_QUESTIONS
 
 def seed_quizzes():
